@@ -13,7 +13,19 @@
 // Task types (from shared/src/task.ts)
 // ---------------------------------------------------------------------------
 
-export type TaskQueue = 'incoming' | 'claimed' | 'provisional' | 'done' | 'backlog' | 'blocked' | 'needs_continuation'
+export type TaskQueue =
+  | 'incoming'
+  | 'claimed'
+  | 'provisional'
+  | 'done'
+  | 'failed'
+  | 'rejected'
+  | 'escalated'
+  | 'recycled'
+  | 'breakdown'
+  | 'needs_continuation'
+  | 'backlog'
+  | 'blocked'
 
 export type TaskPriority = 'P0' | 'P1' | 'P2' | 'P3'
 
@@ -64,6 +76,9 @@ export interface Task {
   needs_breakdown?: boolean | null  // For breakdown agent
   review_round?: number | null      // For multi-check gatekeeper
   execution_notes?: string | null   // Agent execution summary
+
+  // Hook tracking (server-enforced)
+  hooks?: string | null  // JSON array of hook objects
 }
 
 export interface CreateTaskRequest {
@@ -79,6 +94,7 @@ export interface CreateTaskRequest {
   blocked_by?: string
   project_id?: string
   auto_accept?: boolean
+  hooks?: string  // JSON array of hook objects
 }
 
 export interface UpdateTaskRequest {
@@ -108,6 +124,7 @@ export interface UpdateTaskRequest {
   staging_url?: string
   submitted_at?: string
   completed_at?: string
+  hooks?: string  // JSON array of hook objects
   version?: number
 }
 
@@ -115,6 +132,7 @@ export interface ClaimTaskRequest {
   orchestrator_id: string
   agent_name: string
   role_filter?: TaskRole | TaskRole[]
+  type_filter?: string | string[]
   priority_order?: TaskPriority[]
   lease_duration_seconds?: number  // Default: 300 (5 minutes)
 }
@@ -273,7 +291,7 @@ export interface OrchestratorListResponse {
 export type DraftStatus = 'idea' | 'draft' | 'review' | 'approved' | 'implemented' | 'archived'
 
 export interface Draft {
-  id: string
+  id: number
   title: string
   status: DraftStatus
   author: string
@@ -287,7 +305,6 @@ export interface Draft {
 }
 
 export interface CreateDraftRequest {
-  id: string
   title: string
   status?: DraftStatus
   author: string

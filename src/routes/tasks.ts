@@ -142,8 +142,8 @@ tasksRoute.post('/', async (c) => {
     db,
     `INSERT INTO tasks (
       id, file_path, title, queue, priority, complexity, role, type, branch,
-      blocked_by, project_id, auto_accept, created_at, updated_at, version
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), 1)`,
+      blocked_by, project_id, auto_accept, hooks, created_at, updated_at, version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), 1)`,
     body.id,
     body.file_path,
     body.title || body.id,
@@ -155,7 +155,8 @@ tasksRoute.post('/', async (c) => {
     body.branch || 'main',
     body.blocked_by || null,
     body.project_id || null,
-    body.auto_accept || false
+    body.auto_accept || false,
+    body.hooks || null
   )
 
   if (!result.success) {
@@ -209,6 +210,7 @@ tasksRoute.patch('/:id', async (c) => {
     'staging_url',
     'submitted_at',
     'completed_at',
+    'hooks',
   ]
 
   for (const field of fields) {
@@ -236,6 +238,65 @@ tasksRoute.patch('/:id', async (c) => {
   const task = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
 
   return c.json(task)
+})
+
+/**
+ * Record hook evidence
+ * POST /api/v1/tasks/:id/hooks/:hookName/complete
+ */
+tasksRoute.post('/:id/hooks/:hookName/complete', async (c) => {
+  const db = c.env.DB
+  const taskId = c.req.param('id')
+  const hookName = c.req.param('hookName')
+  const body = await c.req.json() as { status: string; evidence?: Record<string, unknown> }
+
+  if (!body.status || !['passed', 'failed'].includes(body.status)) {
+    return c.json({ error: 'status must be "passed" or "failed"' }, 400)
+  }
+
+  // Get current task
+  const task = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
+  if (!task) {
+    return c.json({ error: 'Task not found' }, 404)
+  }
+
+  // Parse hooks
+  let hooks: Array<Record<string, unknown>> = []
+  if (task.hooks) {
+    try {
+      hooks = JSON.parse(task.hooks)
+    } catch {
+      return c.json({ error: 'Invalid hooks data on task' }, 500)
+    }
+  }
+
+  // Find and update the matching hook
+  let found = false
+  for (const hook of hooks) {
+    if (hook.name === hookName) {
+      hook.status = body.status
+      if (body.evidence) {
+        hook.evidence = body.evidence
+      }
+      found = true
+      break
+    }
+  }
+
+  if (!found) {
+    return c.json({ error: `Hook '${hookName}' not found on task` }, 404)
+  }
+
+  // Save updated hooks
+  await execute(
+    db,
+    `UPDATE tasks SET hooks = ?, updated_at = datetime('now') WHERE id = ?`,
+    JSON.stringify(hooks),
+    taskId
+  )
+
+  const updated = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
+  return c.json(updated)
 })
 
 /**
@@ -274,8 +335,9 @@ tasksRoute.post('/claim', async (c) => {
     )
   }
 
-  // Build WHERE clause for role filter
+  // Build WHERE clauses for role and type filters
   let roleCondition = ''
+  let typeCondition = ''
   const params: unknown[] = []
 
   if (body.role_filter) {
@@ -286,6 +348,14 @@ tasksRoute.post('/claim', async (c) => {
     params.push(...roles)
   }
 
+  if (body.type_filter) {
+    const types = Array.isArray(body.type_filter)
+      ? body.type_filter
+      : [body.type_filter]
+    typeCondition = `AND type IN (${types.map(() => '?').join(',')})`
+    params.push(...types)
+  }
+
   // Find available task (no blocked_by, in incoming queue)
   const task = await queryOne<Task>(
     db,
@@ -293,6 +363,7 @@ tasksRoute.post('/claim', async (c) => {
      WHERE queue = 'incoming'
      AND (blocked_by IS NULL OR blocked_by = '')
      ${roleCondition}
+     ${typeCondition}
      ORDER BY priority ASC, created_at ASC
      LIMIT 1`,
     ...params

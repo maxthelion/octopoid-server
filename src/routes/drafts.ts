@@ -28,18 +28,43 @@ draftsRoute.post('/', async (c) => {
   const body = await c.req.json<CreateDraftRequest>()
 
   // Validate required fields
-  if (!body.id || !body.title || !body.author) {
+  if (!body.title || !body.author) {
     return c.json(
-      { error: 'Missing required fields: id, title, author' },
+      { error: 'Missing required fields: title, author' },
       400
     )
   }
 
   const now = new Date().toISOString()
+  const status = body.status || 'idea'
+
+  const result = await db
+    .prepare(
+      `INSERT INTO drafts (
+        title, status, author, domain, file_path,
+        created_at, updated_at, linked_task_id, linked_project_id, tags
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      body.title,
+      status,
+      body.author,
+      body.domain || null,
+      body.file_path || null,
+      now,
+      now,
+      body.linked_task_id || null,
+      body.linked_project_id || null,
+      body.tags ? JSON.stringify(body.tags) : null
+    )
+    .run()
+
+  // Retrieve the auto-assigned ID
+  const id = result.meta?.last_row_id
   const draft: Draft = {
-    id: body.id,
+    id: id as number,
     title: body.title,
-    status: body.status || 'idea',
+    status,
     author: body.author,
     domain: body.domain || null,
     file_path: body.file_path || null,
@@ -50,36 +75,7 @@ draftsRoute.post('/', async (c) => {
     tags: body.tags ? JSON.stringify(body.tags) : null,
   }
 
-  try {
-    await db
-      .prepare(
-        `INSERT INTO drafts (
-          id, title, status, author, domain, file_path,
-          created_at, updated_at, linked_task_id, linked_project_id, tags
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .bind(
-        draft.id,
-        draft.title,
-        draft.status,
-        draft.author,
-        draft.domain,
-        draft.file_path,
-        draft.created_at,
-        draft.updated_at,
-        draft.linked_task_id,
-        draft.linked_project_id,
-        draft.tags
-      )
-      .run()
-
-    return c.json(draft, 201)
-  } catch (error: any) {
-    if (error.message?.includes('UNIQUE constraint failed')) {
-      return c.json({ error: `Draft ${body.id} already exists` }, 409)
-    }
-    throw error
-  }
+  return c.json(draft, 201)
 })
 
 /**
@@ -88,7 +84,11 @@ draftsRoute.post('/', async (c) => {
  */
 draftsRoute.get('/:id', async (c) => {
   const db = c.env.DB
-  const id = c.req.param('id')
+  const id = parseInt(c.req.param('id'), 10)
+
+  if (isNaN(id)) {
+    return c.json({ error: 'Draft ID must be an integer' }, 400)
+  }
 
   const result = await db
     .prepare('SELECT * FROM drafts WHERE id = ?')
@@ -191,7 +191,12 @@ draftsRoute.get('/', async (c) => {
  */
 draftsRoute.patch('/:id', async (c) => {
   const db = c.env.DB
-  const id = c.req.param('id')
+  const id = parseInt(c.req.param('id'), 10)
+
+  if (isNaN(id)) {
+    return c.json({ error: 'Draft ID must be an integer' }, 400)
+  }
+
   const body = await c.req.json<UpdateDraftRequest>()
 
   // Check if draft exists
@@ -278,7 +283,11 @@ draftsRoute.patch('/:id', async (c) => {
  */
 draftsRoute.delete('/:id', async (c) => {
   const db = c.env.DB
-  const id = c.req.param('id')
+  const id = parseInt(c.req.param('id'), 10)
+
+  if (isNaN(id)) {
+    return c.json({ error: 'Draft ID must be an integer' }, 400)
+  }
 
   // Check if draft exists
   const existing = await db
