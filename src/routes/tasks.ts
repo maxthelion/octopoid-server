@@ -137,6 +137,18 @@ tasksRoute.post('/', async (c) => {
     )
   }
 
+  // Inherit branch from project if not explicitly provided
+  if (body.project_id && (!body.branch || body.branch === 'main')) {
+    const project = await queryOne<{ branch: string }>(
+      db,
+      'SELECT branch FROM projects WHERE id = ?',
+      body.project_id
+    )
+    if (project?.branch) {
+      body.branch = project.branch
+    }
+  }
+
   // Insert task
   const result = await execute(
     db,
@@ -471,12 +483,14 @@ tasksRoute.post('/:id/submit', async (c) => {
      SET commits_count = ?,
          turns_used = ?,
          check_results = ?,
+         execution_notes = ?,
          submitted_at = datetime('now'),
          updated_at = datetime('now')
      WHERE id = ?`,
     body.commits_count,
     body.turns_used,
     body.check_results || null,
+    body.execution_notes || null,
     taskId
   )
 
