@@ -79,6 +79,10 @@ export interface Task {
 
   // Hook tracking (server-enforced)
   hooks?: string | null  // JSON array of hook objects
+
+  // Declarative flows
+  flow?: string | null  // Flow name (e.g. 'default', 'hotfix')
+  flow_overrides?: string | null  // JSON object with flow-specific overrides
 }
 
 export interface CreateTaskRequest {
@@ -95,6 +99,8 @@ export interface CreateTaskRequest {
   project_id?: string
   auto_accept?: boolean
   hooks?: string  // JSON array of hook objects
+  flow?: string  // Flow name
+  flow_overrides?: string  // JSON object with flow-specific overrides
 }
 
 export interface UpdateTaskRequest {
@@ -125,6 +131,8 @@ export interface UpdateTaskRequest {
   submitted_at?: string
   completed_at?: string
   hooks?: string  // JSON array of hook objects
+  flow?: string  // Flow name
+  flow_overrides?: string  // JSON object with flow-specific overrides
   version?: number
 }
 

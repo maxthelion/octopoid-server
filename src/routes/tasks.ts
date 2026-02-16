@@ -154,8 +154,8 @@ tasksRoute.post('/', async (c) => {
     db,
     `INSERT INTO tasks (
       id, file_path, title, queue, priority, complexity, role, type, branch,
-      blocked_by, project_id, auto_accept, hooks, created_at, updated_at, version
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), 1)`,
+      blocked_by, project_id, auto_accept, hooks, flow, flow_overrides, created_at, updated_at, version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), 1)`,
     body.id,
     body.file_path,
     body.title || body.id,
@@ -168,7 +168,9 @@ tasksRoute.post('/', async (c) => {
     body.blocked_by || null,
     body.project_id || null,
     body.auto_accept || false,
-    body.hooks || null
+    body.hooks || null,
+    body.flow || 'default',
+    body.flow_overrides || null
   )
 
   if (!result.success) {
@@ -223,6 +225,8 @@ tasksRoute.patch('/:id', async (c) => {
     'submitted_at',
     'completed_at',
     'hooks',
+    'flow',
+    'flow_overrides',
   ]
 
   for (const field of fields) {
