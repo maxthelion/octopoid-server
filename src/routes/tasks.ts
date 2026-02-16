@@ -164,7 +164,7 @@ tasksRoute.post('/', async (c) => {
     body.complexity || null,
     body.role || null,
     body.type || null,
-    body.branch || 'main',
+    body.branch || null,
     body.blocked_by || null,
     body.project_id || null,
     body.auto_accept || false,
@@ -189,6 +189,17 @@ tasksRoute.patch('/:id', async (c) => {
   const db = c.env.DB
   const taskId = c.req.param('id')
   const body = (await c.req.json()) as UpdateTaskRequest
+
+  // Guard: Prevent direct queue="done" transitions
+  // The done queue should only be reached via POST /api/v1/tasks/:id/accept
+  if (body.queue === 'done') {
+    return c.json(
+      {
+        error: 'Cannot set queue to "done" via PATCH. Use POST /api/v1/tasks/:id/accept instead.',
+      },
+      400
+    )
+  }
 
   // Build SET clause dynamically
   const updates: string[] = []
