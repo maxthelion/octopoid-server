@@ -149,6 +149,7 @@ export interface SubmitTaskRequest {
   commits_count: number
   turns_used: number
   check_results?: string
+  execution_notes?: string
 }
 
 export interface AcceptTaskRequest {

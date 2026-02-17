@@ -440,5 +440,35 @@ describe('Server Integration Tests', () => {
       })
       expect(response.status).toBe(404)
     })
+
+    it('should reject PATCH with queue=done', async () => {
+      // Create a task
+      const taskId = `test-task-patch-done-${Date.now()}`
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/incoming/${taskId}.md`,
+          queue: 'incoming',
+          priority: 'P1',
+          role: 'implement',
+        }),
+      })
+
+      // Try to PATCH queue to "done" (should fail)
+      const response = await fetch(`${baseUrl}/api/v1/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          queue: 'done',
+        }),
+      })
+
+      expect(response.status).toBe(400)
+      const data = await response.json()
+      expect(data.error).toContain('Cannot set queue to "done"')
+      expect(data.error).toContain('/accept')
+    })
   })
 })
