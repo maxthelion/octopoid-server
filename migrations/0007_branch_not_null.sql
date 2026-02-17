@@ -44,8 +44,9 @@ CREATE TABLE tasks_new (
     title TEXT,
     type TEXT,
     hooks TEXT,
-    -- Column added by route code
-    failure_reason TEXT,
+    -- Columns from migration 0007_add_flow_fields
+    flow TEXT DEFAULT 'default',
+    flow_overrides TEXT,
     FOREIGN KEY (project_id) REFERENCES projects(id),
     FOREIGN KEY (orchestrator_id) REFERENCES orchestrators(id)
 );
@@ -61,7 +62,7 @@ INSERT INTO tasks_new SELECT
     completed_at, created_at, updated_at, orchestrator_id,
     lease_expires_at, version,
     needs_breakdown, review_round, execution_notes,
-    title, type, hooks, failure_reason
+    title, type, hooks, flow, flow_overrides
 FROM tasks;
 
 DROP TABLE tasks;

@@ -83,6 +83,9 @@ export interface Task {
   // Declarative flows
   flow?: string | null  // Flow name (e.g. 'default', 'hotfix')
   flow_overrides?: string | null  // JSON object with flow-specific overrides
+
+  // Multi-tenant isolation
+  scope?: string | null
 }
 
 export interface CreateTaskRequest {
@@ -101,6 +104,7 @@ export interface CreateTaskRequest {
   hooks?: string  // JSON array of hook objects
   flow?: string  // Flow name
   flow_overrides?: string  // JSON object with flow-specific overrides
+  scope?: string
 }
 
 export interface UpdateTaskRequest {
@@ -143,6 +147,7 @@ export interface ClaimTaskRequest {
   type_filter?: string | string[]
   priority_order?: TaskPriority[]
   lease_duration_seconds?: number  // Default: 300 (5 minutes)
+  scope?: string
 }
 
 export interface SubmitTaskRequest {
@@ -171,6 +176,7 @@ export interface TaskFilters {
   has_plan?: boolean
   auto_accept?: boolean
   needs_rebase?: boolean
+  scope?: string
 }
 
 export interface TaskListResponse {
@@ -197,6 +203,7 @@ export interface Project {
   created_at: string
   created_by?: string | null
   completed_at?: string | null
+  scope?: string | null
 }
 
 export interface CreateProjectRequest {
@@ -208,6 +215,7 @@ export interface CreateProjectRequest {
   base_branch?: string
   auto_accept?: boolean
   created_by?: string
+  scope?: string
 }
 
 export interface UpdateProjectRequest {
@@ -223,6 +231,7 @@ export interface UpdateProjectRequest {
 export interface ProjectFilters {
   status?: ProjectStatus | ProjectStatus[]
   created_by?: string
+  scope?: string
 }
 
 export interface ProjectListResponse {
@@ -311,6 +320,7 @@ export interface Draft {
   linked_task_id?: string | null
   linked_project_id?: string | null
   tags?: string | null  // JSON string array
+  scope?: string | null
 }
 
 export interface CreateDraftRequest {
@@ -322,6 +332,7 @@ export interface CreateDraftRequest {
   linked_task_id?: string
   linked_project_id?: string
   tags?: string[]
+  scope?: string
 }
 
 export interface UpdateDraftRequest {
@@ -342,6 +353,7 @@ export interface DraftFilters {
   domain?: string
   linked_task_id?: string
   linked_project_id?: string
+  scope?: string
 }
 
 export interface DraftListResponse {

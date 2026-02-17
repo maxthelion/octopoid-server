@@ -73,6 +73,12 @@ tasksRoute.get('/', async (c) => {
     params.push(projectId)
   }
 
+  const scopeParam = c.req.query('scope')
+  if (scopeParam) {
+    conditions.push('scope = ?')
+    params.push(scopeParam)
+  }
+
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
   // Get total count
@@ -111,8 +117,16 @@ tasksRoute.get('/', async (c) => {
 tasksRoute.get('/:id', async (c) => {
   const db = c.env.DB
   const taskId = c.req.param('id')
+  const scopeParam = c.req.query('scope')
 
-  const task = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
+  let sql = 'SELECT * FROM tasks WHERE id = ?'
+  const params: unknown[] = [taskId]
+  if (scopeParam) {
+    sql += ' AND scope = ?'
+    params.push(scopeParam)
+  }
+
+  const task = await queryOne<Task>(db, sql, ...params)
 
   if (!task) {
     return c.json({ error: 'Task not found', task_id: taskId }, 404)
@@ -161,8 +175,8 @@ tasksRoute.post('/', async (c) => {
     db,
     `INSERT INTO tasks (
       id, file_path, title, queue, priority, complexity, role, type, branch,
-      blocked_by, project_id, auto_accept, hooks, flow, flow_overrides, created_at, updated_at, version
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), 1)`,
+      blocked_by, project_id, auto_accept, hooks, flow, flow_overrides, scope, created_at, updated_at, version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), 1)`,
     body.id,
     body.file_path,
     body.title || body.id,
@@ -177,7 +191,8 @@ tasksRoute.post('/', async (c) => {
     body.auto_accept || false,
     body.hooks || null,
     body.flow || 'default',
-    body.flow_overrides || null
+    body.flow_overrides || null,
+    body.scope || null
   )
 
   if (!result.success) {
@@ -390,6 +405,12 @@ tasksRoute.post('/claim', async (c) => {
     params.push(...types)
   }
 
+  let scopeCondition = ''
+  if (body.scope) {
+    scopeCondition = 'AND scope = ?'
+    params.push(body.scope)
+  }
+
   // Find available task (no blocked_by, in incoming queue)
   const task = await queryOne<Task>(
     db,
@@ -398,6 +419,7 @@ tasksRoute.post('/claim', async (c) => {
      AND (blocked_by IS NULL OR blocked_by = '')
      ${roleCondition}
      ${typeCondition}
+     ${scopeCondition}
      ORDER BY priority ASC, created_at ASC
      LIMIT 1`,
     ...params

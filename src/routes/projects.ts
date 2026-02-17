@@ -48,6 +48,7 @@ projectsRoute.post('/', async (c) => {
     created_at: now,
     created_by: body.created_by || null,
     completed_at: null,
+    scope: body.scope || null,
   }
 
   try {
@@ -55,8 +56,8 @@ projectsRoute.post('/', async (c) => {
       .prepare(
         `INSERT INTO projects (
           id, title, description, status, branch, base_branch,
-          auto_accept, created_at, created_by, completed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          auto_accept, created_at, created_by, completed_at, scope
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         project.id,
@@ -68,7 +69,8 @@ projectsRoute.post('/', async (c) => {
         project.auto_accept ? 1 : 0,
         project.created_at,
         project.created_by,
-        project.completed_at
+        project.completed_at,
+        project.scope
       )
       .run()
 
@@ -88,10 +90,18 @@ projectsRoute.post('/', async (c) => {
 projectsRoute.get('/:id', async (c) => {
   const db = c.env.DB
   const id = c.req.param('id')
+  const scopeParam = c.req.query('scope')
+
+  let sql = 'SELECT * FROM projects WHERE id = ?'
+  const bindParams: unknown[] = [id]
+  if (scopeParam) {
+    sql += ' AND scope = ?'
+    bindParams.push(scopeParam)
+  }
 
   const result = await db
-    .prepare('SELECT * FROM projects WHERE id = ?')
-    .bind(id)
+    .prepare(sql)
+    .bind(...bindParams)
     .first<Project>()
 
   if (!result) {
@@ -126,12 +136,18 @@ projectsRoute.get('/:id/tasks', async (c) => {
   }
 
   // Get all tasks for this project
+  const scopeParam = c.req.query('scope')
+  let tasksSql = `SELECT * FROM tasks WHERE project_id = ?`
+  const tasksParams: unknown[] = [id]
+  if (scopeParam) {
+    tasksSql += ' AND scope = ?'
+    tasksParams.push(scopeParam)
+  }
+  tasksSql += ' ORDER BY priority, created_at DESC'
+
   const results = await db
-    .prepare(
-      `SELECT * FROM tasks WHERE project_id = ?
-       ORDER BY priority, created_at DESC`
-    )
-    .bind(id)
+    .prepare(tasksSql)
+    .bind(...tasksParams)
     .all<Task>()
 
   return c.json({
@@ -174,6 +190,11 @@ projectsRoute.get('/', async (c) => {
   if (filters.created_by) {
     conditions.push('created_by = ?')
     params.push(filters.created_by)
+  }
+
+  if (query.scope) {
+    conditions.push('scope = ?')
+    params.push(query.scope)
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''

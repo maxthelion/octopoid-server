@@ -42,8 +42,8 @@ draftsRoute.post('/', async (c) => {
     .prepare(
       `INSERT INTO drafts (
         title, status, author, domain, file_path,
-        created_at, updated_at, linked_task_id, linked_project_id, tags
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        created_at, updated_at, linked_task_id, linked_project_id, tags, scope
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       body.title,
@@ -55,7 +55,8 @@ draftsRoute.post('/', async (c) => {
       now,
       body.linked_task_id || null,
       body.linked_project_id || null,
-      body.tags ? JSON.stringify(body.tags) : null
+      body.tags ? JSON.stringify(body.tags) : null,
+      body.scope || null
     )
     .run()
 
@@ -73,6 +74,7 @@ draftsRoute.post('/', async (c) => {
     linked_task_id: body.linked_task_id || null,
     linked_project_id: body.linked_project_id || null,
     tags: body.tags ? JSON.stringify(body.tags) : null,
+    scope: body.scope || null,
   }
 
   return c.json(draft, 201)
@@ -90,9 +92,17 @@ draftsRoute.get('/:id', async (c) => {
     return c.json({ error: 'Draft ID must be an integer' }, 400)
   }
 
+  const scopeParam = c.req.query('scope')
+  let sql = 'SELECT * FROM drafts WHERE id = ?'
+  const bindParams: unknown[] = [id]
+  if (scopeParam) {
+    sql += ' AND scope = ?'
+    bindParams.push(scopeParam)
+  }
+
   const result = await db
-    .prepare('SELECT * FROM drafts WHERE id = ?')
-    .bind(id)
+    .prepare(sql)
+    .bind(...bindParams)
     .first<Draft>()
 
   if (!result) {
@@ -153,6 +163,11 @@ draftsRoute.get('/', async (c) => {
   if (filters.linked_project_id) {
     conditions.push('linked_project_id = ?')
     params.push(filters.linked_project_id)
+  }
+
+  if (query.scope) {
+    conditions.push('scope = ?')
+    params.push(query.scope)
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''

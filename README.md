@@ -13,6 +13,7 @@ The server provides a REST API for coordinating multiple AI orchestrators across
 - **Drafts** for ideas/proposals that can become tasks
 - **Projects** for grouping related tasks
 - **Cron-based lease expiration** to reclaim abandoned tasks
+- **Scope-based multi-tenancy** to isolate entities per project/session
 
 ## Architecture
 
@@ -108,7 +109,9 @@ migrations/
 ├── 0001_initial.sql
 ├── 0002_add_missing_fields.sql
 ├── 0003_add_title_field.sql
-└── 0004_add_task_type.sql
+├── 0004_add_task_type.sql
+├── ...
+└── 0009_add_scope.sql
 ```
 
 ### Apply migrations
@@ -149,7 +152,7 @@ npx wrangler d1 migrations create octopoid-db <description>
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/v1/tasks` | List tasks (filter by `?queue=`) |
+| `GET` | `/api/v1/tasks` | List tasks (filter by `?queue=`, `?scope=`) |
 | `POST` | `/api/v1/tasks` | Create a task |
 | `GET` | `/api/v1/tasks/:id` | Get task by ID |
 | `PATCH` | `/api/v1/tasks/:id` | Update task fields |
@@ -179,6 +182,27 @@ npx wrangler d1 migrations create octopoid-db <description>
 | `GET` | `/api/v1/projects/:id/tasks` | Get project tasks |
 | `PATCH` | `/api/v1/projects/:id` | Update a project |
 | `DELETE` | `/api/v1/projects/:id` | Delete a project |
+
+## Multi-tenancy (Scope)
+
+All entities (tasks, projects, drafts) support an optional `scope` field for isolating data between different projects or sessions sharing the same server.
+
+- Set `scope` in the request body when creating an entity
+- Filter by `?scope=<value>` on any list or get endpoint
+- Claim requests accept `scope` in the body to only claim tasks within that scope
+- Omitting `scope` makes the entity global (backwards compatible)
+- Scope is immutable — set once at creation, never changed
+
+```bash
+# Create a scoped task
+curl -X POST /api/v1/tasks -d '{"id": "t-1", "file_path": "...", "branch": "main", "scope": "my-project"}'
+
+# List only tasks in that scope
+curl /api/v1/tasks?scope=my-project
+
+# Claim within a scope
+curl -X POST /api/v1/tasks/claim -d '{"orchestrator_id": "...", "agent_name": "...", "scope": "my-project"}'
+```
 
 ## Environment Variables / Secrets
 
