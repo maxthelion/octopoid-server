@@ -137,8 +137,15 @@ tasksRoute.post('/', async (c) => {
     )
   }
 
-  // Inherit branch from project if not explicitly provided
-  if (body.project_id && (!body.branch || body.branch === 'main')) {
+  if (!body.branch) {
+    return c.json(
+      { error: 'Missing required field: branch. Caller must set branch explicitly.' },
+      400
+    )
+  }
+
+  // For project tasks, inherit the project's branch if it differs
+  if (body.project_id) {
     const project = await queryOne<{ branch: string }>(
       db,
       'SELECT branch FROM projects WHERE id = ?',
