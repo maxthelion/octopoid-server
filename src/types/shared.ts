@@ -135,6 +135,7 @@ export interface ClaimTaskRequest {
   type_filter?: string | string[]
   priority_order?: TaskPriority[]
   lease_duration_seconds?: number  // Default: 300 (5 minutes)
+  queue?: string  // Queue to claim from (default: 'incoming')
 }
 
 export interface SubmitTaskRequest {

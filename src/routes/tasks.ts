@@ -365,6 +365,9 @@ tasksRoute.post('/claim', async (c) => {
     )
   }
 
+  // Determine which queue to claim from (default: 'incoming')
+  const claimQueue = body.queue || 'incoming'
+
   // Build WHERE clauses for role and type filters
   let roleCondition = ''
   let typeCondition = ''
@@ -386,16 +389,22 @@ tasksRoute.post('/claim', async (c) => {
     params.push(...types)
   }
 
-  // Find available task (no blocked_by, in incoming queue)
+  // For incoming queue: require no blocked_by; for provisional: skip that check
+  const blockedByCondition = claimQueue === 'incoming'
+    ? "AND (blocked_by IS NULL OR blocked_by = '')"
+    : ''
+
+  // Find available task in the specified queue
   const task = await queryOne<Task>(
     db,
     `SELECT * FROM tasks
-     WHERE queue = 'incoming'
-     AND (blocked_by IS NULL OR blocked_by = '')
+     WHERE queue = ?
+     ${blockedByCondition}
      ${roleCondition}
      ${typeCondition}
      ORDER BY priority ASC, created_at ASC
      LIMIT 1`,
+    claimQueue,
     ...params
   )
 
@@ -403,9 +412,14 @@ tasksRoute.post('/claim', async (c) => {
     return c.json({ message: 'No tasks available' }, 404)
   }
 
+  // Choose transition based on queue
+  const transition = claimQueue === 'provisional'
+    ? TRANSITIONS.claim_for_review
+    : TRANSITIONS.claim
+
   // Execute claim transition
   const leaseDuration = body.lease_duration_seconds || config.defaultLeaseDurationSeconds
-  const transitionResult = await executeTransition(db, task.id, TRANSITIONS.claim, {
+  const transitionResult = await executeTransition(db, task.id, transition, {
     orchestrator_id: body.orchestrator_id,
     agent_name: body.agent_name,
     role_filter: body.role_filter,

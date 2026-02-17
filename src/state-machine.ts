@@ -310,6 +310,17 @@ export const TRANSITIONS: Record<string, StateTransition> = {
     side_effects: [{ type: 'record_history', params: { event: 'requeued' } }],
   },
 
+  claim_for_review: {
+    from: 'provisional',
+    to: 'provisional',  // stays provisional, just marks claimed_by
+    action: 'claim_for_review',
+    guards: [{ type: 'role_matches' }],
+    side_effects: [
+      { type: 'record_history', params: { event: 'review_claimed' } },
+      { type: 'update_lease' },
+    ],
+  },
+
   block: {
     from: 'incoming',
     to: 'blocked',
