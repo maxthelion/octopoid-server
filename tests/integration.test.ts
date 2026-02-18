@@ -607,7 +607,8 @@ describe('Server Integration Tests', () => {
       expect(response.status).toBe(200)
       const data = await response.json()
       expect(data.id).toBe(taskId)
-      expect(data.queue).toBe('claimed')
+      // claim_for_review: task stays in provisional (not moved to claimed)
+      expect(data.queue).toBe('provisional')
     })
 
     it('should be idempotent on re-registration', async () => {

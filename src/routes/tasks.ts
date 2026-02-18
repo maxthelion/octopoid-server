@@ -425,8 +425,8 @@ tasksRoute.post('/claim', async (c) => {
   }
 
   // Determine which queue to claim from
-  let claimQueue = (body as any).queue || 'incoming'
-  if (body.role_filter && !(body as any).queue) {
+  let claimQueue = body.queue || 'incoming'
+  if (body.role_filter && !body.queue) {
     const roleName = Array.isArray(body.role_filter) ? body.role_filter[0] : body.role_filter
     const role = await queryOne<{ claims_from: string }>(
       db,
@@ -464,9 +464,10 @@ tasksRoute.post('/claim', async (c) => {
   const newVersion = task.version + 1
   const leaseExpiry = new Date(Date.now() + leaseDuration * 1000).toISOString()
 
+  const targetQueue = claimQueue === 'provisional' ? 'provisional' : 'claimed'
   const result = await execute(db,
     `UPDATE tasks
-     SET queue = 'claimed',
+     SET queue = ?,
          version = ?,
          claimed_by = ?,
          claimed_at = datetime('now'),
@@ -474,6 +475,7 @@ tasksRoute.post('/claim', async (c) => {
          orchestrator_id = ?,
          updated_at = datetime('now')
      WHERE id = ? AND queue = ? AND version = ?`,
+    targetQueue,
     newVersion,
     body.agent_name,
     leaseExpiry,
@@ -488,10 +490,11 @@ tasksRoute.post('/claim', async (c) => {
   }
 
   // Side effect: record history
+  const historyEvent = claimQueue === 'provisional' ? 'review_claimed' : 'claimed'
   await execute(db,
     `INSERT INTO task_history (task_id, event, agent, timestamp)
      VALUES (?, ?, ?, datetime('now'))`,
-    task.id, 'claimed', body.agent_name
+    task.id, historyEvent, body.agent_name
   )
 
   // Return claimed task

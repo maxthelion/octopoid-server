@@ -148,6 +148,7 @@ export interface ClaimTaskRequest {
   priority_order?: TaskPriority[]
   lease_duration_seconds?: number  // Default: 300 (5 minutes)
   scope?: string
+  queue?: string  // 'incoming' | 'provisional' — which queue to claim from
 }
 
 export interface SubmitTaskRequest {
