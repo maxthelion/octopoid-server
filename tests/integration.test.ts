@@ -453,6 +453,7 @@ describe('Server Integration Tests', () => {
           queue: 'incoming',
           priority: 'P1',
           role: 'implement',
+          branch: 'main',
         }),
       })
 
@@ -469,6 +470,165 @@ describe('Server Integration Tests', () => {
       const data = await response.json()
       expect(data.error).toContain('Cannot set queue to "done"')
       expect(data.error).toContain('/accept')
+    })
+  })
+
+  describe('Roles', () => {
+    const orchestratorId = 'test-roles-orch'
+
+    beforeAll(async () => {
+      // Register an orchestrator for role tests
+      await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'test',
+          machine_id: 'roles-orch',
+          repo_url: 'https://github.com/test/repo',
+        }),
+      })
+    })
+
+    it('should register roles and list them', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/roles/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orchestrator_id: orchestratorId,
+          roles: [
+            { name: 'implement', claims_from: 'incoming', description: 'Code implementation' },
+            { name: 'review', claims_from: 'provisional', description: 'Code review' },
+          ],
+        }),
+      })
+
+      expect(response.status).toBe(200)
+      const data = await response.json()
+      expect(data.roles).toBeDefined()
+      expect(data.roles.length).toBeGreaterThanOrEqual(2)
+
+      // List all roles
+      const listResponse = await fetch(`${baseUrl}/api/v1/roles`)
+      const listData = await listResponse.json()
+      expect(listResponse.status).toBe(200)
+      expect(listData.roles.length).toBeGreaterThanOrEqual(2)
+    })
+
+    it('should get a role by name', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/roles/implement`)
+      const data = await response.json()
+
+      expect(response.status).toBe(200)
+      expect(data.name).toBe('implement')
+      expect(data.claims_from).toBe('incoming')
+    })
+
+    it('should return 404 for unknown role', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/roles/nonexistent`)
+      expect(response.status).toBe(404)
+    })
+
+    it('should return 400 when registering roles for unknown orchestrator', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/roles/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orchestrator_id: 'does-not-exist',
+          roles: [{ name: 'test' }],
+        }),
+      })
+
+      expect(response.status).toBe(400)
+    })
+
+    it('should reject task creation with invalid role when roles are registered', async () => {
+      const taskId = `test-task-bad-role-${Date.now()}`
+      const response = await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/incoming/${taskId}.md`,
+          role: 'nonexistent-role',
+          branch: 'main',
+        }),
+      })
+
+      expect(response.status).toBe(400)
+      const data = await response.json()
+      expect(data.error).toContain('Unknown role')
+      expect(data.error).toContain('nonexistent-role')
+    })
+
+    it('should allow task creation with valid registered role', async () => {
+      const taskId = `test-task-good-role-${Date.now()}`
+      const response = await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/incoming/${taskId}.md`,
+          role: 'implement',
+          branch: 'main',
+        }),
+      })
+
+      expect(response.status).toBe(201)
+      const data = await response.json()
+      expect(data.role).toBe('implement')
+    })
+
+    it('should use role claims_from when claiming without explicit queue', async () => {
+      // Create a task in the 'provisional' queue with role 'review'
+      const taskId = `test-task-claims-from-${Date.now()}`
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/incoming/${taskId}.md`,
+          role: 'review',
+          queue: 'provisional',
+          branch: 'main',
+        }),
+      })
+
+      // Claim with role_filter=review — should look in 'provisional' queue (from role's claims_from)
+      const response = await fetch(`${baseUrl}/api/v1/tasks/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orchestrator_id: orchestratorId,
+          agent_name: 'review-agent',
+          role_filter: 'review',
+        }),
+      })
+
+      expect(response.status).toBe(200)
+      const data = await response.json()
+      expect(data.id).toBe(taskId)
+      expect(data.queue).toBe('claimed')
+    })
+
+    it('should be idempotent on re-registration', async () => {
+      // Register same roles again
+      const response = await fetch(`${baseUrl}/api/v1/roles/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orchestrator_id: orchestratorId,
+          roles: [
+            { name: 'implement', claims_from: 'incoming', description: 'Updated description' },
+          ],
+        }),
+      })
+
+      expect(response.status).toBe(200)
+
+      // Verify description was updated
+      const getResponse = await fetch(`${baseUrl}/api/v1/roles/implement`)
+      const data = await getResponse.json()
+      expect(data.description).toBe('Updated description')
     })
   })
 })

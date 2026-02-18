@@ -5,7 +5,6 @@
 import { Hono } from 'hono'
 import type {
   Task,
-  TaskQueue,
   CreateTaskRequest,
   UpdateTaskRequest,
   ClaimTaskRequest,
@@ -16,7 +15,8 @@ import type {
 } from '../types/shared.js'
 import type { Env } from '../index'
 import { query, queryOne, execute } from '../database'
-import { executeTransition, TRANSITIONS } from '../state-machine'
+// NOTE: executeTransition/TRANSITIONS from state-machine.ts are no longer used here.
+// These endpoints now use inline atomic UPDATEs with optimistic locking instead.
 import { getConfig } from '../config'
 
 export const tasksRoute = new Hono<{ Bindings: Env }>()
@@ -156,6 +156,19 @@ tasksRoute.post('/', async (c) => {
       { error: 'Missing required field: branch. Caller must set branch explicitly.' },
       400
     )
+  }
+
+  // Validate role against registered roles (if any are registered)
+  if (body.role) {
+    const registeredRoles = await queryOne<{ count: number }>(db, 'SELECT COUNT(*) as count FROM roles')
+    if (registeredRoles && registeredRoles.count > 0) {
+      const role = await queryOne(db, 'SELECT name FROM roles WHERE name = ?', body.role)
+      if (!role) {
+        const allRoles = await query<{ name: string }>(db, 'SELECT name FROM roles ORDER BY name')
+        const roleNames = allRoles.map(r => r.name).join(', ')
+        return c.json({ error: `Unknown role '${body.role}'. Registered roles: ${roleNames}` }, 400)
+      }
+    }
   }
 
   // For project tasks, inherit the project's branch if it differs
@@ -411,50 +424,74 @@ tasksRoute.post('/claim', async (c) => {
     params.push(body.scope)
   }
 
-  // Find available task (no blocked_by, in incoming queue)
+  // Determine which queue to claim from
+  let claimQueue = (body as any).queue || 'incoming'
+  if (body.role_filter && !(body as any).queue) {
+    const roleName = Array.isArray(body.role_filter) ? body.role_filter[0] : body.role_filter
+    const role = await queryOne<{ claims_from: string }>(
+      db,
+      'SELECT claims_from FROM roles WHERE name = ?',
+      roleName
+    )
+    if (role?.claims_from) {
+      claimQueue = role.claims_from
+    }
+  }
+
+  // Find available task (no blocked_by, in the target queue)
+  const claimParams = [claimQueue, ...params]
   const task = await queryOne<Task>(
     db,
     `SELECT * FROM tasks
-     WHERE queue = 'incoming'
+     WHERE queue = ?
      AND (blocked_by IS NULL OR blocked_by = '')
      ${roleCondition}
      ${typeCondition}
      ${scopeCondition}
      ORDER BY priority ASC, created_at ASC
      LIMIT 1`,
-    ...params
+    ...claimParams
   )
 
   if (!task) {
     return c.json({ message: 'No tasks available' }, 404)
   }
 
-  // Execute claim transition
-  const leaseDuration = body.lease_duration_seconds || config.defaultLeaseDurationSeconds
-  const transitionResult = await executeTransition(db, task.id, TRANSITIONS.claim, {
-    orchestrator_id: body.orchestrator_id,
-    agent_name: body.agent_name,
-    role_filter: body.role_filter,
-    lease_duration_seconds: leaseDuration,
-  })
+  // Guards: dependency_resolved (already filtered by query above), role_matches (already filtered by roleCondition)
 
-  if (!transitionResult.success) {
-    return c.json(
-      { error: 'Failed to claim task', details: transitionResult.errors },
-      409
-    )
+  // Atomic claim: queue transition + metadata in a single UPDATE with optimistic locking
+  const leaseDuration = body.lease_duration_seconds || config.defaultLeaseDurationSeconds
+  const newVersion = task.version + 1
+  const leaseExpiry = new Date(Date.now() + leaseDuration * 1000).toISOString()
+
+  const result = await execute(db,
+    `UPDATE tasks
+     SET queue = 'claimed',
+         version = ?,
+         claimed_by = ?,
+         claimed_at = datetime('now'),
+         lease_expires_at = ?,
+         orchestrator_id = ?,
+         updated_at = datetime('now')
+     WHERE id = ? AND queue = ? AND version = ?`,
+    newVersion,
+    body.agent_name,
+    leaseExpiry,
+    body.orchestrator_id,
+    task.id,
+    claimQueue,
+    task.version
+  )
+
+  if (result.meta.changes === 0) {
+    return c.json({ error: 'Failed to claim task (race or wrong state)' }, 409)
   }
 
-  // Update claimed_by and claimed_at
-  await execute(
-    db,
-    `UPDATE tasks
-     SET claimed_by = ?,
-         claimed_at = datetime('now'),
-         updated_at = datetime('now')
-     WHERE id = ?`,
-    body.agent_name,
-    task.id
+  // Side effect: record history
+  await execute(db,
+    `INSERT INTO task_history (task_id, event, agent, timestamp)
+     VALUES (?, ?, ?, datetime('now'))`,
+    task.id, 'claimed', body.agent_name
   )
 
   // Return claimed task
@@ -484,58 +521,76 @@ tasksRoute.post('/:id/submit', async (c) => {
     )
   }
 
+  // Get current task state
+  const task = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
+  if (!task) {
+    return c.json({ error: 'Task not found', task_id: taskId }, 404)
+  }
+
+  if (task.queue !== 'claimed') {
+    return c.json(
+      { error: 'Failed to submit task', details: [`Invalid transition: task is in ${task.queue}, expected claimed`] },
+      409
+    )
+  }
+
+  // Guard: lease_valid
+  if (!task.lease_expires_at || new Date(task.lease_expires_at) < new Date()) {
+    return c.json(
+      { error: 'Failed to submit task', details: [task.lease_expires_at ? 'Lease has expired' : 'No active lease'] },
+      409
+    )
+  }
+
   // Burnout detection: Check if agent is stuck
   const BURNOUT_TURN_THRESHOLD = 80
   const MAX_TURN_LIMIT = 100
   let burnoutDetected = false
 
   if (body.commits_count === 0 && body.turns_used >= BURNOUT_TURN_THRESHOLD) {
-    // Agent made no progress but used many turns - stuck
     burnoutDetected = true
     console.warn(
       `⚠️  Burnout detected for task ${taskId}: 0 commits, ${body.turns_used} turns`
     )
   } else if (body.turns_used >= MAX_TURN_LIMIT) {
-    // Hit absolute turn limit
     burnoutDetected = true
     console.warn(
       `⚠️  Turn limit reached for task ${taskId}: ${body.turns_used}/${MAX_TURN_LIMIT}`
     )
   }
 
-  // Execute submit transition (or route to needs_continuation if burnout)
-  const transition = burnoutDetected
-    ? { ...TRANSITIONS.submit, to: 'needs_continuation' as TaskQueue }
-    : TRANSITIONS.submit
+  const targetQueue = burnoutDetected ? 'needs_continuation' : 'provisional'
 
-  const transitionResult = await executeTransition(db, taskId, transition, {
-    commits_count: body.commits_count,
-    turns_used: body.turns_used,
-  })
-
-  if (!transitionResult.success) {
-    return c.json(
-      { error: 'Failed to submit task', details: transitionResult.errors },
-      409
-    )
-  }
-
-  // Update task fields
-  await execute(
-    db,
+  // Atomic submit: queue transition + metadata in a single UPDATE with optimistic locking
+  const result = await execute(db,
     `UPDATE tasks
-     SET commits_count = ?,
+     SET queue = ?,
+         version = version + 1,
+         commits_count = ?,
          turns_used = ?,
          check_results = ?,
          execution_notes = ?,
          submitted_at = datetime('now'),
          updated_at = datetime('now')
-     WHERE id = ?`,
+     WHERE id = ? AND queue = 'claimed' AND version = ?`,
+    targetQueue,
     body.commits_count,
     body.turns_used,
     body.check_results || null,
     body.execution_notes || null,
-    taskId
+    taskId,
+    task.version
+  )
+
+  if (result.meta.changes === 0) {
+    return c.json({ error: 'Failed to submit task (race or wrong state)' }, 409)
+  }
+
+  // Side effect: record history
+  await execute(db,
+    `INSERT INTO task_history (task_id, event, agent, timestamp)
+     VALUES (?, ?, ?, datetime('now'))`,
+    taskId, 'submitted', task.claimed_by || null
   )
 
   // Record burnout event if detected
@@ -554,9 +609,9 @@ tasksRoute.post('/:id/submit', async (c) => {
     )
   }
 
-  const task = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
+  const updatedTask = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
 
-  return c.json(task)
+  return c.json(updatedTask)
 })
 
 /**
@@ -572,33 +627,54 @@ tasksRoute.post('/:id/accept', async (c) => {
     return c.json({ error: 'Missing required field: accepted_by' }, 400)
   }
 
-  // Execute accept transition
-  const transitionResult = await executeTransition(db, taskId, TRANSITIONS.accept, {
-    accepted_by: body.accepted_by,
-  })
+  // Get current task state
+  const task = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
+  if (!task) {
+    return c.json({ error: 'Task not found', task_id: taskId }, 404)
+  }
 
-  if (!transitionResult.success) {
+  if (task.queue !== 'provisional') {
     return c.json(
-      { error: 'Failed to accept task', details: transitionResult.errors },
+      { error: 'Failed to accept task', details: [`Invalid transition: task is in ${task.queue}, expected provisional`] },
       409
     )
   }
 
-  // Update completed_at
+  // Atomic accept: queue transition + completed_at in a single UPDATE with optimistic locking
   const completedAt = body.completed_at || new Date().toISOString()
-  await execute(
-    db,
+  const result = await execute(db,
     `UPDATE tasks
-     SET completed_at = ?,
+     SET queue = 'done',
+         version = version + 1,
+         completed_at = ?,
          updated_at = datetime('now')
-     WHERE id = ?`,
+     WHERE id = ? AND queue = 'provisional' AND version = ?`,
     completedAt,
+    taskId,
+    task.version
+  )
+
+  if (result.meta.changes === 0) {
+    return c.json({ error: 'Failed to accept task (race or wrong state)' }, 409)
+  }
+
+  // Side effects: record history, unblock dependents
+  await execute(db,
+    `INSERT INTO task_history (task_id, event, agent, timestamp)
+     VALUES (?, ?, ?, datetime('now'))`,
+    taskId, 'accepted', body.accepted_by
+  )
+
+  await execute(db,
+    `UPDATE tasks
+     SET blocked_by = NULL, updated_at = datetime('now')
+     WHERE blocked_by = ?`,
     taskId
   )
 
-  const task = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
+  const updatedTask = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
 
-  return c.json(task)
+  return c.json(updatedTask)
 })
 
 /**
@@ -617,34 +693,47 @@ tasksRoute.post('/:id/reject', async (c) => {
     )
   }
 
-  // Execute reject transition
-  const transitionResult = await executeTransition(db, taskId, TRANSITIONS.reject, {
-    reason: body.reason,
-    rejected_by: body.rejected_by,
-  })
+  // Get current task state
+  const task = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
+  if (!task) {
+    return c.json({ error: 'Task not found', task_id: taskId }, 404)
+  }
 
-  if (!transitionResult.success) {
+  if (task.queue !== 'provisional') {
     return c.json(
-      { error: 'Failed to reject task', details: transitionResult.errors },
+      { error: 'Failed to reject task', details: [`Invalid transition: task is in ${task.queue}, expected provisional`] },
       409
     )
   }
 
-  // Increment rejection count
-  await execute(
-    db,
+  // Atomic reject: queue transition + cleanup in a single UPDATE with optimistic locking
+  const result = await execute(db,
     `UPDATE tasks
-     SET rejection_count = rejection_count + 1,
+     SET queue = 'incoming',
+         version = version + 1,
+         rejection_count = rejection_count + 1,
          claimed_by = NULL,
          claimed_at = NULL,
          orchestrator_id = NULL,
          lease_expires_at = NULL,
          updated_at = datetime('now')
-     WHERE id = ?`,
-    taskId
+     WHERE id = ? AND queue = 'provisional' AND version = ?`,
+    taskId,
+    task.version
   )
 
-  const task = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
+  if (result.meta.changes === 0) {
+    return c.json({ error: 'Failed to reject task (race or wrong state)' }, 409)
+  }
 
-  return c.json(task)
+  // Side effect: record history
+  await execute(db,
+    `INSERT INTO task_history (task_id, event, agent, timestamp)
+     VALUES (?, ?, ?, datetime('now'))`,
+    taskId, 'rejected', body.rejected_by
+  )
+
+  const updatedTask = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
+
+  return c.json(updatedTask)
 })
