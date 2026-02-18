@@ -1,5 +1,4 @@
 -- Migration: Add flow fields to tasks table
--- Adds flow and flow_overrides columns for declarative flows system
-
-ALTER TABLE tasks ADD COLUMN flow TEXT DEFAULT 'default';
-ALTER TABLE tasks ADD COLUMN flow_overrides TEXT;
+-- NOTE: These columns are now included in 0007_branch_not_null.sql table recreation.
+-- This migration is kept as a no-op for migration history consistency.
+SELECT 1;

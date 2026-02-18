@@ -397,6 +397,22 @@ tasksRoute.post('/claim', async (c) => {
     )
   }
 
+  // Validate role_filter against registered roles (if any are registered)
+  if (body.role_filter) {
+    const roles = Array.isArray(body.role_filter) ? body.role_filter : [body.role_filter]
+    const registeredRoles = await queryOne<{ count: number }>(db, 'SELECT COUNT(*) as count FROM roles')
+    if (registeredRoles && registeredRoles.count > 0) {
+      for (const roleName of roles) {
+        const role = await queryOne(db, 'SELECT name FROM roles WHERE name = ?', roleName)
+        if (!role) {
+          const allRoles = await query<{ name: string }>(db, 'SELECT name FROM roles ORDER BY name')
+          const roleNames = allRoles.map(r => r.name).join(', ')
+          return c.json({ error: `Unknown role '${roleName}'. Registered roles: ${roleNames}` }, 400)
+        }
+      }
+    }
+  }
+
   // Build WHERE clauses for role and type filters
   let roleCondition = ''
   let typeCondition = ''

@@ -611,6 +611,52 @@ describe('Server Integration Tests', () => {
       expect(data.queue).toBe('provisional')
     })
 
+    it('should reject claim with invalid role_filter when roles are registered', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/tasks/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orchestrator_id: orchestratorId,
+          agent_name: 'test-agent',
+          role_filter: 'nonexistent-role',
+        }),
+      })
+
+      expect(response.status).toBe(400)
+      const data = await response.json()
+      expect(data.error).toContain('Unknown role')
+      expect(data.error).toContain('nonexistent-role')
+    })
+
+    it('should allow claim with valid role_filter when roles are registered', async () => {
+      const taskId = `test-task-claim-valid-role-${Date.now()}`
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/incoming/${taskId}.md`,
+          role: 'implement',
+          queue: 'incoming',
+          branch: 'main',
+        }),
+      })
+
+      const response = await fetch(`${baseUrl}/api/v1/tasks/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orchestrator_id: orchestratorId,
+          agent_name: 'test-agent',
+          role_filter: 'implement',
+        }),
+      })
+
+      expect(response.status).toBe(200)
+      const data = await response.json()
+      expect(data.id).toBe(taskId)
+    })
+
     it('should be idempotent on re-registration', async () => {
       // Register same roles again
       const response = await fetch(`${baseUrl}/api/v1/roles/register`, {

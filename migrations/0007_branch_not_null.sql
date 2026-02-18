@@ -52,6 +52,7 @@ CREATE TABLE tasks_new (
 );
 
 -- Copy data, backfilling NULL branches with 'main'
+-- Use defaults for flow/flow_overrides since 0007_add_flow_fields may not have run yet
 INSERT INTO tasks_new SELECT
     id, file_path, queue, priority, complexity, role,
     COALESCE(branch, 'main'),
@@ -62,7 +63,7 @@ INSERT INTO tasks_new SELECT
     completed_at, created_at, updated_at, orchestrator_id,
     lease_expires_at, version,
     needs_breakdown, review_round, execution_notes,
-    title, type, hooks, flow, flow_overrides
+    title, type, hooks, 'default', NULL
 FROM tasks;
 
 DROP TABLE tasks;
