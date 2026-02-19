@@ -40,6 +40,7 @@ tasksRoute.get('/', async (c) => {
     config.maxPageSize
   )
   const offset = parseInt(c.req.query('offset') || '0')
+  const sort = c.req.query('sort') // 'priority' for priority ASC, created_at ASC
 
   // Build WHERE clause
   const conditions: string[] = []
@@ -90,10 +91,14 @@ tasksRoute.get('/', async (c) => {
   const total = countResult?.count || 0
 
   // Get tasks
+  const orderClause = sort === 'priority'
+    ? 'ORDER BY priority ASC, created_at ASC'
+    : 'ORDER BY created_at DESC'
+
   const tasks = await query<Task>(
     db,
     `SELECT * FROM tasks ${whereClause}
-     ORDER BY priority ASC, created_at ASC
+     ${orderClause}
      LIMIT ? OFFSET ?`,
     ...params,
     limit,
