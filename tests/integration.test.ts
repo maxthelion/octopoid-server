@@ -678,4 +678,105 @@ describe('Server Integration Tests', () => {
       expect(data.description).toBe('Updated description')
     })
   })
+
+  describe('Scheduler Poll', () => {
+    it('should return queue counts, provisional tasks, and orchestrator status', async () => {
+      const orchestratorId = 'test-sched-poll'
+
+      // Register orchestrator
+      await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'test',
+          machine_id: 'sched-poll',
+          repo_url: 'https://github.com/test/repo',
+        }),
+      })
+
+      // Create an incoming task
+      const incomingId = `test-poll-incoming-${Date.now()}`
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: incomingId,
+          file_path: `tasks/${incomingId}.md`,
+          queue: 'incoming',
+          role: 'implement',
+          branch: 'main',
+        }),
+      })
+
+      // Create a provisional task with hooks and pr_number
+      const provId = `test-poll-prov-${Date.now()}`
+      const hooks = JSON.stringify([{ name: 'ci', status: 'pending' }])
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: provId,
+          file_path: `tasks/${provId}.md`,
+          queue: 'provisional',
+          role: 'review',
+          branch: 'main',
+          hooks,
+        }),
+      })
+
+      // Set pr_number via PATCH (not included in task creation)
+      await fetch(`${baseUrl}/api/v1/tasks/${provId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pr_number: 87 }),
+      })
+
+      // Poll
+      const response = await fetch(
+        `${baseUrl}/api/v1/scheduler/poll?orchestrator_id=${orchestratorId}`
+      )
+      const data = await response.json() as any
+
+      expect(response.status).toBe(200)
+
+      // Queue counts
+      expect(data.queue_counts).toBeDefined()
+      expect(typeof data.queue_counts.incoming).toBe('number')
+      expect(typeof data.queue_counts.claimed).toBe('number')
+      expect(typeof data.queue_counts.provisional).toBe('number')
+      expect(data.queue_counts.incoming).toBeGreaterThanOrEqual(1)
+      expect(data.queue_counts.provisional).toBeGreaterThanOrEqual(1)
+
+      // Provisional tasks
+      expect(Array.isArray(data.provisional_tasks)).toBe(true)
+      const provTask = data.provisional_tasks.find((t: any) => t.id === provId)
+      expect(provTask).toBeDefined()
+      expect(provTask.hooks).toBe(hooks)
+      expect(provTask.pr_number).toBe(87)
+      expect('claimed_by' in provTask).toBe(true)
+
+      // Orchestrator registered
+      expect(data.orchestrator_registered).toBe(true)
+    })
+
+    it('should return orchestrator_registered=false for unknown orchestrator', async () => {
+      const response = await fetch(
+        `${baseUrl}/api/v1/scheduler/poll?orchestrator_id=does-not-exist`
+      )
+      const data = await response.json() as any
+
+      expect(response.status).toBe(200)
+      expect(data.orchestrator_registered).toBe(false)
+    })
+
+    it('should return orchestrator_registered=false when no orchestrator_id provided', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/scheduler/poll`)
+      const data = await response.json() as any
+
+      expect(response.status).toBe(200)
+      expect(data.orchestrator_registered).toBe(false)
+      expect(data.queue_counts).toBeDefined()
+      expect(Array.isArray(data.provisional_tasks)).toBe(true)
+    })
+  })
 })
