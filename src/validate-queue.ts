@@ -18,7 +18,8 @@ const builtInSet = new Set<string>(BUILT_IN_QUEUES)
 export async function validateQueue(
   db: D1Database,
   queue: string,
-  flowName: string = 'default'
+  flowName: string = 'default',
+  cluster: string = 'default'
 ): Promise<string | null> {
   if (builtInSet.has(queue)) return null // always valid
 
@@ -26,8 +27,8 @@ export async function validateQueue(
   try {
     flow = await queryOne<{ states: string }>(
       db,
-      'SELECT states FROM flows WHERE name = ?',
-      flowName
+      'SELECT states FROM flows WHERE name = ? AND cluster = ?',
+      flowName, cluster
     )
   } catch {
     return null // table doesn't exist yet, skip validation

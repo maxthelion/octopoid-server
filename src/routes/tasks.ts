@@ -179,7 +179,7 @@ tasksRoute.post('/', async (c) => {
 
   // Validate queue against registered flow
   if (body.queue) {
-    const queueError = await validateQueue(db, body.queue, body.flow || 'default')
+    const queueError = await validateQueue(db, body.queue, body.flow || 'default', body.cluster || 'default')
     if (queueError) {
       return c.json({ error: queueError }, 400)
     }
@@ -254,9 +254,14 @@ tasksRoute.patch('/:id', async (c) => {
 
   // Validate queue against registered flow
   if (body.queue) {
-    const task = await queryOne<{ flow: string | null }>(db, 'SELECT flow FROM tasks WHERE id = ?', taskId)
+    const task = await queryOne<{ flow: string | null; orchestrator_id: string | null }>(db, 'SELECT flow, orchestrator_id FROM tasks WHERE id = ?', taskId)
     const flowName = task?.flow || 'default'
-    const queueError = await validateQueue(db, body.queue, flowName)
+    let cluster = 'default'
+    if (task?.orchestrator_id) {
+      const orch = await queryOne<{ cluster: string }>(db, 'SELECT cluster FROM orchestrators WHERE id = ?', task.orchestrator_id)
+      if (orch) cluster = orch.cluster
+    }
+    const queueError = await validateQueue(db, body.queue, flowName, cluster)
     if (queueError) {
       return c.json({ error: queueError }, 400)
     }
@@ -439,7 +444,10 @@ tasksRoute.post('/claim', async (c) => {
 
   // Validate queue against registered flow
   if (body.queue) {
-    const queueError = await validateQueue(db, body.queue)
+    let cluster = 'default'
+    const orch = await queryOne<{ cluster: string }>(db, 'SELECT cluster FROM orchestrators WHERE id = ?', body.orchestrator_id)
+    if (orch) cluster = orch.cluster
+    const queueError = await validateQueue(db, body.queue, 'default', cluster)
     if (queueError) {
       return c.json({ error: queueError }, 400)
     }

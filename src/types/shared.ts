@@ -96,6 +96,7 @@ export interface CreateTaskRequest {
   flow?: string  // Flow name
   flow_overrides?: string  // JSON object with flow-specific overrides
   scope?: string
+  cluster?: string  // Cluster for flow validation
 }
 
 export interface UpdateTaskRequest {
