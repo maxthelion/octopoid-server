@@ -79,6 +79,9 @@ app.get('/', (c) => {
       'PUT  /api/v1/flows/:name',
       'GET  /api/v1/flows',
       'GET  /api/v1/flows/:name',
+      'POST /api/v1/messages',
+      'GET  /api/v1/messages',
+      'GET  /api/v1/tasks/:id/messages',
     ],
   })
 })
@@ -91,6 +94,7 @@ import { projectsRoute } from './routes/projects'
 import { rolesRoute } from './routes/roles'
 import { schedulerRoute } from './routes/scheduler'
 import { flowsRoute } from './routes/flows'
+import { messagesRoute } from './routes/messages'
 app.route('/api/v1/tasks', tasksRoute)
 app.route('/api/v1/orchestrators', orchestratorsRoute)
 app.route('/api/v1/drafts', draftsRoute)
@@ -98,6 +102,7 @@ app.route('/api/v1/projects', projectsRoute)
 app.route('/api/v1/roles', rolesRoute)
 app.route('/api/v1/scheduler', schedulerRoute)
 app.route('/api/v1/flows', flowsRoute)
+app.route('/api/v1/messages', messagesRoute)
 
 // 404 handler
 app.notFound((c) => {

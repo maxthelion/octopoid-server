@@ -12,6 +12,8 @@ import type {
   AcceptTaskRequest,
   RejectTaskRequest,
   TaskListResponse,
+  Message,
+  MessageListResponse,
 } from '../types/shared.js'
 import type { Env } from '../index'
 import { query, queryOne, execute } from '../database'
@@ -143,6 +145,51 @@ tasksRoute.get('/:id', async (c) => {
   }
 
   return c.json(task)
+})
+
+/**
+ * Get messages for a specific task
+ * GET /api/v1/tasks/:id/messages
+ */
+tasksRoute.get('/:id/messages', async (c) => {
+  const db = c.env.DB
+  const taskId = c.req.param('id')
+  const scopeParam = c.req.query('scope')
+  const limit = parseInt(c.req.query('limit') || '50')
+  const offset = parseInt(c.req.query('offset') || '0')
+
+  if (!scopeParam) {
+    return c.json(
+      { error: 'Missing required query parameter: scope. Cannot list messages across all scopes.' },
+      400
+    )
+  }
+
+  const countResult = await queryOne<{ count: number }>(
+    db,
+    'SELECT COUNT(*) as count FROM messages WHERE task_id = ? AND scope = ?',
+    taskId,
+    scopeParam
+  )
+  const total = countResult?.count || 0
+
+  const results = await query<Message>(
+    db,
+    'SELECT * FROM messages WHERE task_id = ? AND scope = ? ORDER BY created_at ASC LIMIT ? OFFSET ?',
+    taskId,
+    scopeParam,
+    limit,
+    offset
+  )
+
+  const response: MessageListResponse = {
+    messages: results,
+    total,
+    offset,
+    limit,
+  }
+
+  return c.json(response)
 })
 
 /**

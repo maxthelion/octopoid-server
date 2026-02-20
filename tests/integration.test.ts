@@ -962,4 +962,174 @@ describe('Server Integration Tests', () => {
       })
     })
   })
+
+  describe('Messages', () => {
+    const MSG_SCOPE = `messages-${Date.now()}`
+    let taskId: string
+
+    beforeAll(async () => {
+      taskId = `test-msg-task-${Date.now()}`
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/${taskId}.md`,
+          queue: 'incoming',
+          branch: 'main',
+          scope: MSG_SCOPE,
+        }),
+      })
+    })
+
+    it('should create a message', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: taskId,
+          from_actor: 'orchestrator',
+          to_actor: 'agent-1',
+          type: 'instruction',
+          content: 'Please implement feature X',
+          scope: MSG_SCOPE,
+        }),
+      })
+
+      expect(response.status).toBe(201)
+      const data = await response.json() as any
+      expect(data.id).toBeDefined()
+      expect(data.task_id).toBe(taskId)
+      expect(data.from_actor).toBe('orchestrator')
+      expect(data.to_actor).toBe('agent-1')
+      expect(data.type).toBe('instruction')
+      expect(data.content).toBe('Please implement feature X')
+      expect(data.scope).toBe(MSG_SCOPE)
+      expect(data.created_at).toBeDefined()
+    })
+
+    it('should reject message creation without scope', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: taskId,
+          from_actor: 'orchestrator',
+          type: 'instruction',
+          content: 'No scope message',
+        }),
+      })
+
+      expect(response.status).toBe(400)
+      const data = await response.json() as any
+      expect(data.error).toContain('scope')
+    })
+
+    it('should reject message creation without required fields', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: taskId,
+          scope: MSG_SCOPE,
+        }),
+      })
+
+      expect(response.status).toBe(400)
+      const data = await response.json() as any
+      expect(data.error).toContain('Missing required fields')
+    })
+
+    it('should list messages by task_id', async () => {
+      // Create a second message
+      await fetch(`${baseUrl}/api/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: taskId,
+          from_actor: 'agent-1',
+          type: 'status',
+          content: 'Working on feature X',
+          scope: MSG_SCOPE,
+        }),
+      })
+
+      const response = await fetch(
+        `${baseUrl}/api/v1/messages?task_id=${taskId}&scope=${MSG_SCOPE}`
+      )
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.messages.length).toBeGreaterThanOrEqual(2)
+      expect(data.total).toBeGreaterThanOrEqual(2)
+      data.messages.forEach((msg: any) => {
+        expect(msg.task_id).toBe(taskId)
+      })
+    })
+
+    it('should list messages by to_actor', async () => {
+      const response = await fetch(
+        `${baseUrl}/api/v1/messages?to_actor=agent-1&scope=${MSG_SCOPE}`
+      )
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.messages.length).toBeGreaterThanOrEqual(1)
+      data.messages.forEach((msg: any) => {
+        expect(msg.to_actor).toBe('agent-1')
+      })
+    })
+
+    it('should filter messages by type', async () => {
+      const response = await fetch(
+        `${baseUrl}/api/v1/messages?task_id=${taskId}&type=status&scope=${MSG_SCOPE}`
+      )
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.messages.length).toBeGreaterThanOrEqual(1)
+      data.messages.forEach((msg: any) => {
+        expect(msg.type).toBe('status')
+      })
+    })
+
+    it('should reject listing without scope', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/messages?task_id=${taskId}`)
+      expect(response.status).toBe(400)
+      const data = await response.json() as any
+      expect(data.error).toContain('scope')
+    })
+
+    it('should get messages via task sub-resource', async () => {
+      const response = await fetch(
+        `${baseUrl}/api/v1/tasks/${taskId}/messages?scope=${MSG_SCOPE}`
+      )
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.messages.length).toBeGreaterThanOrEqual(2)
+      expect(data.total).toBeGreaterThanOrEqual(2)
+      data.messages.forEach((msg: any) => {
+        expect(msg.task_id).toBe(taskId)
+      })
+      // Verify ordered by created_at
+      for (let i = 1; i < data.messages.length; i++) {
+        expect(data.messages[i].created_at >= data.messages[i - 1].created_at).toBe(true)
+      }
+    })
+
+    it('should reject task messages listing without scope', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/messages`)
+      expect(response.status).toBe(400)
+      const data = await response.json() as any
+      expect(data.error).toContain('scope')
+    })
+
+    it('should enforce scope isolation on messages', async () => {
+      const OTHER_SCOPE = `messages-other-${Date.now()}`
+      const response = await fetch(
+        `${baseUrl}/api/v1/messages?task_id=${taskId}&scope=${OTHER_SCOPE}`
+      )
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.messages.length).toBe(0)
+      expect(data.total).toBe(0)
+    })
+  })
 })

@@ -435,6 +435,37 @@ export interface TaskHistoryListResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Message types (from shared/src/message.ts)
+// ---------------------------------------------------------------------------
+
+export interface Message {
+  id: string
+  task_id: string
+  from_actor: string
+  to_actor?: string | null
+  type: string
+  content: string
+  created_at: string
+  scope?: string | null
+}
+
+export interface CreateMessageRequest {
+  task_id: string
+  from_actor: string
+  to_actor?: string
+  type: string
+  content: string
+  scope?: string
+}
+
+export interface MessageListResponse {
+  messages: Message[]
+  total: number
+  offset: number
+  limit: number
+}
+
+// ---------------------------------------------------------------------------
 // State machine types (from shared/src/state-machine.ts)
 // NOTE: VALID_TRANSITIONS const is NOT copied — the server defines its own
 // TRANSITIONS in src/state-machine.ts.
