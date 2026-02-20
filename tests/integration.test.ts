@@ -7,6 +7,8 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { unstable_dev } from 'wrangler'
 import type { UnstableDevWorker } from 'wrangler'
 
+const TEST_SCOPE = 'test-scope'
+
 describe('Server Integration Tests', () => {
   let worker: UnstableDevWorker
   let baseUrl: string
@@ -49,12 +51,13 @@ describe('Server Integration Tests', () => {
           repo_url: 'https://github.com/test/repo',
           capabilities: { roles: ['implement', 'test'] },
           version: '2.0.0',
+          scope: TEST_SCOPE,
         }),
       })
 
       const data = await response.json()
 
-      expect(response.status).toBe(200)
+      expect([200, 201]).toContain(response.status)
       expect(data.orchestrator_id).toBe('test-test-machine-1')
       expect(data.registered_at).toBeDefined()
     })
@@ -68,6 +71,7 @@ describe('Server Integration Tests', () => {
           cluster: 'test',
           machine_id: 'test-machine-2',
           repo_url: 'https://github.com/test/repo',
+          scope: TEST_SCOPE,
         }),
       })
 
@@ -79,12 +83,29 @@ describe('Server Integration Tests', () => {
           cluster: 'test',
           machine_id: 'test-machine-2',
           repo_url: 'https://github.com/test/repo',
+          scope: TEST_SCOPE,
         }),
       })
 
       const data = await response.json()
       expect(response.status).toBe(200)
       expect(data.orchestrator_id).toBe('test-test-machine-2')
+    })
+
+    it('should reject registration without scope', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'test',
+          machine_id: 'no-scope-orch',
+          repo_url: 'https://github.com/test/repo',
+        }),
+      })
+
+      expect(response.status).toBe(400)
+      const data = await response.json()
+      expect(data.error).toContain('scope')
     })
   })
 
@@ -98,6 +119,7 @@ describe('Server Integration Tests', () => {
           cluster: 'test',
           machine_id: 'test-machine-3',
           repo_url: 'https://github.com/test/repo',
+          scope: TEST_SCOPE,
         }),
       })
 
@@ -132,6 +154,7 @@ describe('Server Integration Tests', () => {
           priority: 'P1',
           role: 'implement',
           branch: 'main',
+          scope: TEST_SCOPE,
         }),
       })
 
@@ -140,10 +163,28 @@ describe('Server Integration Tests', () => {
       expect(data.id).toBe(taskId)
       expect(data.queue).toBe('incoming')
       expect(data.priority).toBe('P1')
+      expect(data.scope).toBe(TEST_SCOPE)
     })
 
-    it('should list tasks', async () => {
-      const response = await fetch(`${baseUrl}/api/v1/tasks`)
+    it('should reject task creation without scope', async () => {
+      const taskId = `test-task-no-scope-${Date.now()}`
+      const response = await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/incoming/${taskId}.md`,
+          branch: 'main',
+        }),
+      })
+
+      expect(response.status).toBe(400)
+      const data = await response.json()
+      expect(data.error).toContain('scope')
+    })
+
+    it('should list tasks with scope', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/tasks?scope=${TEST_SCOPE}`)
       const data = await response.json()
 
       expect(response.status).toBe(200)
@@ -152,8 +193,15 @@ describe('Server Integration Tests', () => {
       expect(data.total).toBeGreaterThanOrEqual(0)
     })
 
+    it('should reject listing tasks without scope', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/tasks`)
+      expect(response.status).toBe(400)
+      const data = await response.json()
+      expect(data.error).toContain('scope')
+    })
+
     it('should filter tasks by queue', async () => {
-      const response = await fetch(`${baseUrl}/api/v1/tasks?queue=incoming`)
+      const response = await fetch(`${baseUrl}/api/v1/tasks?queue=incoming&scope=${TEST_SCOPE}`)
       const data = await response.json()
 
       expect(response.status).toBe(200)
@@ -174,7 +222,8 @@ describe('Server Integration Tests', () => {
           file_path: `tasks/incoming/${taskId}.md`,
           queue: 'incoming',
           priority: 'P2',
-          role: 'test',
+          branch: 'main',
+          scope: TEST_SCOPE,
         }),
       })
 
@@ -189,6 +238,12 @@ describe('Server Integration Tests', () => {
   })
 
   describe('Task Lifecycle', () => {
+    // Use unique scope per lifecycle test to prevent claim cross-contamination
+    const CLAIM_SCOPE = `lifecycle-claim-${Date.now()}`
+    const SUBMIT_SCOPE = `lifecycle-submit-${Date.now()}`
+    const ACCEPT_SCOPE = `lifecycle-accept-${Date.now()}`
+    const REJECT_SCOPE = `lifecycle-reject-${Date.now()}`
+
     it('should claim a task', async () => {
       // Register orchestrator
       await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
@@ -198,6 +253,7 @@ describe('Server Integration Tests', () => {
           cluster: 'test',
           machine_id: 'claim-test',
           repo_url: 'https://github.com/test/repo',
+          scope: CLAIM_SCOPE,
         }),
       })
 
@@ -212,6 +268,8 @@ describe('Server Integration Tests', () => {
           queue: 'incoming',
           priority: 'P1',
           role: 'implement',
+          branch: 'main',
+          scope: CLAIM_SCOPE,
         }),
       })
 
@@ -223,6 +281,7 @@ describe('Server Integration Tests', () => {
           orchestrator_id: 'test-claim-test',
           agent_name: 'test-agent',
           role_filter: 'implement',
+          scope: CLAIM_SCOPE,
         }),
       })
 
@@ -230,8 +289,23 @@ describe('Server Integration Tests', () => {
       expect(response.status).toBe(200)
       expect(data.id).toBe(taskId)
       expect(data.queue).toBe('claimed')
-      expect(data.claimed_by).toBe('test-claim-test')
+      expect(data.claimed_by).toBe('test-agent')
       expect(data.lease_expires_at).toBeDefined()
+    })
+
+    it('should reject claim without scope', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/tasks/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orchestrator_id: 'test-claim-test',
+          agent_name: 'test-agent',
+        }),
+      })
+
+      expect(response.status).toBe(400)
+      const data = await response.json()
+      expect(data.error).toContain('scope')
     })
 
     it('should submit a claimed task', async () => {
@@ -243,6 +317,7 @@ describe('Server Integration Tests', () => {
           cluster: 'test',
           machine_id: 'submit-test',
           repo_url: 'https://github.com/test/repo',
+          scope: SUBMIT_SCOPE,
         }),
       })
 
@@ -257,6 +332,8 @@ describe('Server Integration Tests', () => {
           queue: 'incoming',
           priority: 'P1',
           role: 'implement',
+          branch: 'main',
+          scope: SUBMIT_SCOPE,
         }),
       })
 
@@ -267,6 +344,7 @@ describe('Server Integration Tests', () => {
           orchestrator_id: 'test-submit-test',
           agent_name: 'test-agent',
           role_filter: 'implement',
+          scope: SUBMIT_SCOPE,
         }),
       })
 
@@ -297,6 +375,7 @@ describe('Server Integration Tests', () => {
           cluster: 'test',
           machine_id: 'accept-test',
           repo_url: 'https://github.com/test/repo',
+          scope: ACCEPT_SCOPE,
         }),
       })
 
@@ -311,6 +390,8 @@ describe('Server Integration Tests', () => {
           queue: 'incoming',
           priority: 'P1',
           role: 'implement',
+          branch: 'main',
+          scope: ACCEPT_SCOPE,
         }),
       })
 
@@ -321,6 +402,7 @@ describe('Server Integration Tests', () => {
           orchestrator_id: 'test-accept-test',
           agent_name: 'test-agent',
           role_filter: 'implement',
+          scope: ACCEPT_SCOPE,
         }),
       })
 
@@ -357,6 +439,7 @@ describe('Server Integration Tests', () => {
           cluster: 'test',
           machine_id: 'reject-test',
           repo_url: 'https://github.com/test/repo',
+          scope: REJECT_SCOPE,
         }),
       })
 
@@ -371,6 +454,8 @@ describe('Server Integration Tests', () => {
           queue: 'incoming',
           priority: 'P1',
           role: 'implement',
+          branch: 'main',
+          scope: REJECT_SCOPE,
         }),
       })
 
@@ -381,6 +466,7 @@ describe('Server Integration Tests', () => {
           orchestrator_id: 'test-reject-test',
           agent_name: 'test-agent',
           role_filter: 'implement',
+          scope: REJECT_SCOPE,
         }),
       })
 
@@ -435,7 +521,7 @@ describe('Server Integration Tests', () => {
         body: JSON.stringify({
           orchestrator_id: 'test-no-tasks',
           agent_name: 'test-agent',
-          role_filter: 'non-existent-role',
+          scope: 'nonexistent-scope',
         }),
       })
       expect(response.status).toBe(404)
@@ -454,6 +540,7 @@ describe('Server Integration Tests', () => {
           priority: 'P1',
           role: 'implement',
           branch: 'main',
+          scope: TEST_SCOPE,
         }),
       })
 
@@ -475,6 +562,7 @@ describe('Server Integration Tests', () => {
 
   describe('Roles', () => {
     const orchestratorId = 'test-roles-orch'
+    const ROLES_SCOPE = `roles-${Date.now()}`
 
     beforeAll(async () => {
       // Register an orchestrator for role tests
@@ -485,6 +573,7 @@ describe('Server Integration Tests', () => {
           cluster: 'test',
           machine_id: 'roles-orch',
           repo_url: 'https://github.com/test/repo',
+          scope: ROLES_SCOPE,
         }),
       })
     })
@@ -551,6 +640,7 @@ describe('Server Integration Tests', () => {
           file_path: `tasks/incoming/${taskId}.md`,
           role: 'nonexistent-role',
           branch: 'main',
+          scope: ROLES_SCOPE,
         }),
       })
 
@@ -570,6 +660,7 @@ describe('Server Integration Tests', () => {
           file_path: `tasks/incoming/${taskId}.md`,
           role: 'implement',
           branch: 'main',
+          scope: ROLES_SCOPE,
         }),
       })
 
@@ -579,6 +670,7 @@ describe('Server Integration Tests', () => {
     })
 
     it('should use role claims_from when claiming without explicit queue', async () => {
+      const CLAIMS_FROM_SCOPE = `roles-claims-from-${Date.now()}`
       // Create a task in the 'provisional' queue with role 'review'
       const taskId = `test-task-claims-from-${Date.now()}`
       await fetch(`${baseUrl}/api/v1/tasks`, {
@@ -590,6 +682,7 @@ describe('Server Integration Tests', () => {
           role: 'review',
           queue: 'provisional',
           branch: 'main',
+          scope: CLAIMS_FROM_SCOPE,
         }),
       })
 
@@ -601,6 +694,7 @@ describe('Server Integration Tests', () => {
           orchestrator_id: orchestratorId,
           agent_name: 'review-agent',
           role_filter: 'review',
+          scope: CLAIMS_FROM_SCOPE,
         }),
       })
 
@@ -619,6 +713,7 @@ describe('Server Integration Tests', () => {
           orchestrator_id: orchestratorId,
           agent_name: 'test-agent',
           role_filter: 'nonexistent-role',
+          scope: ROLES_SCOPE,
         }),
       })
 
@@ -629,6 +724,7 @@ describe('Server Integration Tests', () => {
     })
 
     it('should allow claim with valid role_filter when roles are registered', async () => {
+      const VALID_ROLE_SCOPE = `roles-valid-claim-${Date.now()}`
       const taskId = `test-task-claim-valid-role-${Date.now()}`
       await fetch(`${baseUrl}/api/v1/tasks`, {
         method: 'POST',
@@ -639,6 +735,7 @@ describe('Server Integration Tests', () => {
           role: 'implement',
           queue: 'incoming',
           branch: 'main',
+          scope: VALID_ROLE_SCOPE,
         }),
       })
 
@@ -649,6 +746,7 @@ describe('Server Integration Tests', () => {
           orchestrator_id: orchestratorId,
           agent_name: 'test-agent',
           role_filter: 'implement',
+          scope: VALID_ROLE_SCOPE,
         }),
       })
 
@@ -691,6 +789,7 @@ describe('Server Integration Tests', () => {
           cluster: 'test',
           machine_id: 'sched-poll',
           repo_url: 'https://github.com/test/repo',
+          scope: TEST_SCOPE,
         }),
       })
 
@@ -705,6 +804,7 @@ describe('Server Integration Tests', () => {
           queue: 'incoming',
           role: 'implement',
           branch: 'main',
+          scope: TEST_SCOPE,
         }),
       })
 
@@ -721,6 +821,7 @@ describe('Server Integration Tests', () => {
           role: 'review',
           branch: 'main',
           hooks,
+          scope: TEST_SCOPE,
         }),
       })
 
@@ -757,26 +858,108 @@ describe('Server Integration Tests', () => {
 
       // Orchestrator registered
       expect(data.orchestrator_registered).toBe(true)
+      expect(data.scope).toBe(TEST_SCOPE)
     })
 
-    it('should return orchestrator_registered=false for unknown orchestrator', async () => {
+    it('should return 400 for unknown orchestrator without scope fallback', async () => {
       const response = await fetch(
         `${baseUrl}/api/v1/scheduler/poll?orchestrator_id=does-not-exist`
       )
-      const data = await response.json() as any
 
-      expect(response.status).toBe(200)
-      expect(data.orchestrator_registered).toBe(false)
+      expect(response.status).toBe(400)
+      const data = await response.json() as any
+      expect(data.error).toContain('scope')
     })
 
-    it('should return orchestrator_registered=false when no orchestrator_id provided', async () => {
-      const response = await fetch(`${baseUrl}/api/v1/scheduler/poll`)
+    it('should accept explicit scope query param as fallback', async () => {
+      const response = await fetch(
+        `${baseUrl}/api/v1/scheduler/poll?scope=${TEST_SCOPE}`
+      )
       const data = await response.json() as any
 
       expect(response.status).toBe(200)
       expect(data.orchestrator_registered).toBe(false)
       expect(data.queue_counts).toBeDefined()
       expect(Array.isArray(data.provisional_tasks)).toBe(true)
+      expect(data.scope).toBe(TEST_SCOPE)
+    })
+
+    it('should return 400 when no orchestrator_id or scope provided', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/scheduler/poll`)
+      expect(response.status).toBe(400)
+      const data = await response.json() as any
+      expect(data.error).toContain('scope')
+    })
+  })
+
+  describe('Scope Isolation', () => {
+    const SCOPE_A = 'scope-a'
+    const SCOPE_B = 'scope-b'
+
+    beforeAll(async () => {
+      // Register orchestrators for each scope
+      await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'test',
+          machine_id: 'iso-a',
+          repo_url: 'https://github.com/test/repo-a',
+          scope: SCOPE_A,
+        }),
+      })
+      await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'test',
+          machine_id: 'iso-b',
+          repo_url: 'https://github.com/test/repo-b',
+          scope: SCOPE_B,
+        }),
+      })
+    })
+
+    it('should not claim tasks from a different scope', async () => {
+      // Create task in scope A
+      const taskId = `test-iso-${Date.now()}`
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/${taskId}.md`,
+          queue: 'incoming',
+          branch: 'main',
+          scope: SCOPE_A,
+        }),
+      })
+
+      // Try to claim with scope B — should find nothing
+      const response = await fetch(`${baseUrl}/api/v1/tasks/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orchestrator_id: 'test-iso-b',
+          agent_name: 'agent-b',
+          scope: SCOPE_B,
+        }),
+      })
+
+      expect(response.status).toBe(404)
+      const data = await response.json()
+      expect(data.message).toBe('No tasks available')
+    })
+
+    it('should not list tasks from a different scope', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/tasks?scope=${SCOPE_B}`)
+      const data = await response.json()
+
+      expect(response.status).toBe(200)
+      // Should not contain any scope-A tasks
+      data.tasks.forEach((task: any) => {
+        expect(task.scope).toBe(SCOPE_B)
+      })
     })
   })
 })

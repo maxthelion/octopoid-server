@@ -76,10 +76,14 @@ tasksRoute.get('/', async (c) => {
   }
 
   const scopeParam = c.req.query('scope')
-  if (scopeParam) {
-    conditions.push('scope = ?')
-    params.push(scopeParam)
+  if (!scopeParam) {
+    return c.json(
+      { error: 'Missing required query parameter: scope. Cannot list tasks across all scopes.' },
+      400
+    )
   }
+  conditions.push('scope = ?')
+  params.push(scopeParam)
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
@@ -160,6 +164,13 @@ tasksRoute.post('/', async (c) => {
   if (!body.branch) {
     return c.json(
       { error: 'Missing required field: branch. Caller must set branch explicitly.' },
+      400
+    )
+  }
+
+  if (!body.scope) {
+    return c.json(
+      { error: 'Missing required field: scope. All tasks must belong to a scope.' },
       400
     )
   }
@@ -426,6 +437,13 @@ tasksRoute.post('/claim', async (c) => {
     )
   }
 
+  if (!body.scope) {
+    return c.json(
+      { error: 'Missing required field: scope. Cannot claim tasks across all scopes.' },
+      400
+    )
+  }
+
   // Validate role_filter against registered roles (if any are registered)
   if (body.role_filter) {
     const roles = Array.isArray(body.role_filter) ? body.role_filter : [body.role_filter]
@@ -474,11 +492,8 @@ tasksRoute.post('/claim', async (c) => {
     params.push(...types)
   }
 
-  let scopeCondition = ''
-  if (body.scope) {
-    scopeCondition = 'AND scope = ?'
-    params.push(body.scope)
-  }
+  const scopeCondition = 'AND scope = ?'
+  params.push(body.scope)
 
   // Determine which queue to claim from
   let claimQueue = body.queue || 'incoming'

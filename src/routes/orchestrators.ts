@@ -32,6 +32,13 @@ orchestratorsRoute.post('/register', async (c) => {
     )
   }
 
+  if (!body.scope) {
+    return c.json(
+      { error: 'Missing required field: scope. All orchestrators must register with a scope.' },
+      400
+    )
+  }
+
   // Generate orchestrator ID
   const orchestratorId = `${body.cluster}-${body.machine_id}`
 
@@ -54,13 +61,15 @@ orchestratorsRoute.post('/register', async (c) => {
            last_heartbeat = ?,
            status = 'active',
            version = ?,
-           capabilities = ?
+           capabilities = ?,
+           scope = ?
        WHERE id = ?`,
       body.hostname || null,
       body.repo_url,
       now,
       body.version || null,
       body.capabilities ? JSON.stringify(body.capabilities) : null,
+      body.scope,
       orchestratorId
     )
   } else {
@@ -69,8 +78,8 @@ orchestratorsRoute.post('/register', async (c) => {
       db,
       `INSERT INTO orchestrators (
         id, cluster, machine_id, hostname, repo_url,
-        registered_at, last_heartbeat, status, version, capabilities
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+        registered_at, last_heartbeat, status, version, capabilities, scope
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
       orchestratorId,
       body.cluster,
       body.machine_id,
@@ -79,7 +88,8 @@ orchestratorsRoute.post('/register', async (c) => {
       now,
       now,
       body.version || null,
-      body.capabilities ? JSON.stringify(body.capabilities) : null
+      body.capabilities ? JSON.stringify(body.capabilities) : null,
+      body.scope
     )
   }
 

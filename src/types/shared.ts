@@ -259,6 +259,7 @@ export interface Orchestrator {
   status: OrchestratorStatus
   version?: string | null
   capabilities?: OrchestratorCapabilities | null
+  scope?: string | null
 }
 
 export interface RegisterOrchestratorRequest {
@@ -268,6 +269,7 @@ export interface RegisterOrchestratorRequest {
   repo_url: string
   version?: string
   capabilities?: OrchestratorCapabilities
+  scope: string
 }
 
 export interface RegisterOrchestratorResponse {
