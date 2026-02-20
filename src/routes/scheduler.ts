@@ -18,7 +18,7 @@ schedulerRoute.get('/poll', async (c) => {
   const orchestratorId = c.req.query('orchestrator_id')
 
   // Run queries in parallel
-  const [queueCountRows, provisionalTasks, orchestratorRow] = await Promise.all([
+  const [queueCountRows, provisionalTasks, orchestratorRow, flowRows] = await Promise.all([
     // 1. Queue counts for incoming, claimed, provisional
     query<{ queue: string; count: number }>(
       db,
@@ -41,6 +41,12 @@ schedulerRoute.get('/poll', async (c) => {
           orchestratorId
         )
       : Promise.resolve(null),
+
+    // 4. Registered flows (gracefully handle missing table)
+    query<{ name: string; states: string }>(
+      db,
+      'SELECT name, states FROM flows'
+    ).catch(() => [] as { name: string; states: string }[]),
   ])
 
   // Build queue_counts with defaults for missing queues
@@ -53,9 +59,16 @@ schedulerRoute.get('/poll', async (c) => {
     queue_counts[row.queue] = row.count
   }
 
+  // Build flows map
+  const flows: Record<string, { states: string[] }> = {}
+  for (const row of flowRows) {
+    flows[row.name] = { states: JSON.parse(row.states) }
+  }
+
   return c.json({
     queue_counts,
     provisional_tasks: provisionalTasks,
     orchestrator_registered: orchestratorId ? orchestratorRow !== null : false,
+    flows,
   })
 })

@@ -76,6 +76,9 @@ app.get('/', (c) => {
       'PATCH /api/v1/projects/:id',
       'DELETE /api/v1/projects/:id',
       'GET  /api/v1/scheduler/poll',
+      'PUT  /api/v1/flows/:name',
+      'GET  /api/v1/flows',
+      'GET  /api/v1/flows/:name',
     ],
   })
 })
@@ -87,12 +90,14 @@ import { draftsRoute } from './routes/drafts'
 import { projectsRoute } from './routes/projects'
 import { rolesRoute } from './routes/roles'
 import { schedulerRoute } from './routes/scheduler'
+import { flowsRoute } from './routes/flows'
 app.route('/api/v1/tasks', tasksRoute)
 app.route('/api/v1/orchestrators', orchestratorsRoute)
 app.route('/api/v1/drafts', draftsRoute)
 app.route('/api/v1/projects', projectsRoute)
 app.route('/api/v1/roles', rolesRoute)
 app.route('/api/v1/scheduler', schedulerRoute)
+app.route('/api/v1/flows', flowsRoute)
 
 // 404 handler
 app.notFound((c) => {

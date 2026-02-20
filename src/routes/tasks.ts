@@ -18,6 +18,7 @@ import { query, queryOne, execute } from '../database'
 // NOTE: executeTransition/TRANSITIONS from state-machine.ts are no longer used here.
 // These endpoints now use inline atomic UPDATEs with optimistic locking instead.
 import { getConfig } from '../config'
+import { validateQueue } from '../validate-queue'
 
 export const tasksRoute = new Hono<{ Bindings: Env }>()
 
@@ -176,6 +177,14 @@ tasksRoute.post('/', async (c) => {
     }
   }
 
+  // Validate queue against registered flow
+  if (body.queue) {
+    const queueError = await validateQueue(db, body.queue, body.flow || 'default')
+    if (queueError) {
+      return c.json({ error: queueError }, 400)
+    }
+  }
+
   // For project tasks, inherit the project's branch if it differs
   if (body.project_id) {
     const project = await queryOne<{ branch: string }>(
@@ -241,6 +250,16 @@ tasksRoute.patch('/:id', async (c) => {
       },
       400
     )
+  }
+
+  // Validate queue against registered flow
+  if (body.queue) {
+    const task = await queryOne<{ flow: string | null }>(db, 'SELECT flow FROM tasks WHERE id = ?', taskId)
+    const flowName = task?.flow || 'default'
+    const queueError = await validateQueue(db, body.queue, flowName)
+    if (queueError) {
+      return c.json({ error: queueError }, 400)
+    }
   }
 
   // Build SET clause dynamically
@@ -415,6 +434,14 @@ tasksRoute.post('/claim', async (c) => {
           return c.json({ error: `Unknown role '${roleName}'. Registered roles: ${roleNames}` }, 400)
         }
       }
+    }
+  }
+
+  // Validate queue against registered flow
+  if (body.queue) {
+    const queueError = await validateQueue(db, body.queue)
+    if (queueError) {
+      return c.json({ error: queueError }, 400)
     }
   }
 
