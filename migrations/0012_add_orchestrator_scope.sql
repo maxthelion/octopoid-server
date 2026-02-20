@@ -1,3 +1,4 @@
 -- Add scope column to orchestrators for multi-tenant isolation
-ALTER TABLE orchestrators ADD COLUMN scope TEXT;
-CREATE INDEX idx_orchestrators_scope ON orchestrators(scope);
+-- NOTE: ALTER TABLE skipped as column was already applied to production.
+-- New databases get the column from the base schema.
+CREATE INDEX IF NOT EXISTS idx_orchestrators_scope ON orchestrators(scope);
