@@ -22,9 +22,9 @@ actionsRoute.post('/', async (c) => {
   const db = c.env.DB
   const body = await c.req.json<CreateActionRequest>()
 
-  if (!body.entity_type || !body.entity_id || !body.action_type || !body.label || !body.proposed_by) {
+  if (!body.entity_type || !body.entity_id || !body.label || !body.proposed_by) {
     return c.json(
-      { error: 'Missing required fields: entity_type, entity_id, action_type, label, proposed_by' },
+      { error: 'Missing required fields: entity_type, entity_id, label, proposed_by' },
       400
     )
   }
@@ -38,23 +38,25 @@ actionsRoute.post('/', async (c) => {
 
   const id = `act-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const now = new Date().toISOString()
+  const actionType = body.action_type || 'proposal'
 
   await db
     .prepare(
-      `INSERT INTO actions (id, entity_type, entity_id, action_type, label, description, status, proposed_by, proposed_at, expires_at, metadata, scope)
-       VALUES (?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?, ?, ?)`
+      `INSERT INTO actions (id, entity_type, entity_id, action_type, label, description, status, proposed_by, proposed_at, expires_at, metadata, action_data, scope)
+       VALUES (?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       id,
       body.entity_type,
       body.entity_id,
-      body.action_type,
+      actionType,
       body.label,
       body.description || null,
       body.proposed_by,
       now,
       body.expires_at || null,
       body.metadata || null,
+      body.action_data || null,
       body.scope
     )
     .run()
@@ -63,7 +65,7 @@ actionsRoute.post('/', async (c) => {
     id,
     entity_type: body.entity_type,
     entity_id: body.entity_id,
-    action_type: body.action_type,
+    action_type: actionType,
     label: body.label,
     description: body.description || null,
     status: 'proposed',
@@ -73,6 +75,7 @@ actionsRoute.post('/', async (c) => {
     result: null,
     expires_at: body.expires_at || null,
     metadata: body.metadata || null,
+    action_data: body.action_data || null,
     scope: body.scope,
   }
 

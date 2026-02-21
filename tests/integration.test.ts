@@ -1508,5 +1508,59 @@ describe('Server Integration Tests', () => {
       expect(data.actions.length).toBe(0)
       expect(data.total).toBe(0)
     })
+
+    it('should default action_type to "proposal" when not provided', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entity_type: 'draft',
+          entity_id: 'draft-68',
+          label: 'Archive old draft',
+          proposed_by: 'agent-1',
+          scope: ACTION_SCOPE,
+        }),
+      })
+
+      expect(response.status).toBe(201)
+      const data = await response.json() as any
+      expect(data.action_type).toBe('proposal')
+    })
+
+    it('should store and return action_data', async () => {
+      const actionData = JSON.stringify({
+        buttons: [
+          { label: 'Archive', command: 'Set draft 50 status to superseded via the SDK.' },
+          { label: 'Enqueue remaining work', command: 'Create a task to implement the inbox processor.' },
+        ],
+      })
+
+      const response = await fetch(`${baseUrl}/api/v1/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entity_type: 'draft',
+          entity_id: 'draft-68',
+          label: 'Draft 68 actions',
+          proposed_by: 'agent-1',
+          action_data: actionData,
+          scope: ACTION_SCOPE,
+        }),
+      })
+
+      expect(response.status).toBe(201)
+      const data = await response.json() as any
+      expect(data.action_data).toBe(actionData)
+      expect(data.action_type).toBe('proposal')
+
+      // Verify it appears in list responses
+      const listResponse = await fetch(
+        `${baseUrl}/api/v1/actions?entity_id=draft-68&scope=${ACTION_SCOPE}`
+      )
+      const listData = await listResponse.json() as any
+      const found = listData.actions.find((a: any) => a.id === data.id)
+      expect(found).toBeDefined()
+      expect(found.action_data).toBe(actionData)
+    })
   })
 })

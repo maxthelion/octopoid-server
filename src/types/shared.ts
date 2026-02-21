@@ -485,18 +485,20 @@ export interface Action {
   result?: string | null
   expires_at?: string | null
   metadata?: string | null
+  action_data?: string | null
   scope: string
 }
 
 export interface CreateActionRequest {
   entity_type: string
   entity_id: string
-  action_type: string
+  action_type?: string
   label: string
   description?: string
   proposed_by: string
   expires_at?: string
   metadata?: string
+  action_data?: string
   scope: string
 }
 
