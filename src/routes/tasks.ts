@@ -21,6 +21,7 @@ import { query, queryOne, execute } from '../database'
 // These endpoints now use inline atomic UPDATEs with optimistic locking instead.
 import { getConfig } from '../config'
 import { validateQueue } from '../validate-queue'
+import { audit } from '../logger'
 
 export const tasksRoute = new Hono<{ Bindings: Env }>()
 
@@ -381,10 +382,21 @@ tasksRoute.patch('/:id', async (c) => {
   const result = await execute(db, sql, ...params)
 
   if (result.meta.changes === 0) {
+    audit({ timestamp: new Date().toISOString(), method: 'PATCH', path: `/tasks/${taskId}`, status: 404, task_id: taskId })
     return c.json({ error: 'Task not found' }, 404)
   }
 
   const task = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
+
+  audit({
+    timestamp: new Date().toISOString(),
+    method: 'PATCH',
+    path: `/tasks/${taskId}`,
+    status: 200,
+    task_id: taskId,
+    queue_to: body.queue || undefined,
+    detail: `updated fields: ${updates.filter(u => !u.startsWith('updated_at')).map(u => u.split(' =')[0]).join(', ')}`,
+  })
 
   return c.json(task)
 })
@@ -572,6 +584,7 @@ tasksRoute.post('/claim', async (c) => {
   )
 
   if (!task) {
+    audit({ timestamp: new Date().toISOString(), method: 'POST', path: '/tasks/claim', status: 404, agent: body.agent_name, scope: body.scope, detail: `no tasks in queue ${claimQueue}` })
     return c.json({ message: 'No tasks available' }, 404)
   }
 
@@ -604,6 +617,7 @@ tasksRoute.post('/claim', async (c) => {
   )
 
   if (result.meta.changes === 0) {
+    audit({ timestamp: new Date().toISOString(), method: 'POST', path: '/tasks/claim', status: 409, task_id: task.id, agent: body.agent_name, scope: body.scope, detail: 'race or wrong state' })
     return c.json({ error: 'Failed to claim task (race or wrong state)' }, 409)
   }
 
@@ -621,6 +635,18 @@ tasksRoute.post('/claim', async (c) => {
     'SELECT * FROM tasks WHERE id = ?',
     task.id
   )
+
+  audit({
+    timestamp: new Date().toISOString(),
+    method: 'POST',
+    path: '/tasks/claim',
+    status: 200,
+    task_id: task.id,
+    agent: body.agent_name,
+    scope: body.scope,
+    queue_from: claimQueue,
+    queue_to: targetQueue,
+  })
 
   return c.json(claimedTask)
 })
@@ -649,6 +675,7 @@ tasksRoute.post('/:id/submit', async (c) => {
   }
 
   if (task.queue !== 'claimed') {
+    audit({ timestamp: new Date().toISOString(), method: 'POST', path: `/tasks/${taskId}/submit`, status: 409, task_id: taskId, detail: `wrong queue: ${task.queue}` })
     return c.json(
       { error: 'Failed to submit task', details: [`Invalid transition: task is in ${task.queue}, expected claimed`] },
       409
@@ -657,6 +684,7 @@ tasksRoute.post('/:id/submit', async (c) => {
 
   // Guard: lease_valid
   if (!task.lease_expires_at || new Date(task.lease_expires_at) < new Date()) {
+    audit({ timestamp: new Date().toISOString(), method: 'POST', path: `/tasks/${taskId}/submit`, status: 409, task_id: taskId, detail: 'lease expired or missing' })
     return c.json(
       { error: 'Failed to submit task', details: [task.lease_expires_at ? 'Lease has expired' : 'No active lease'] },
       409
@@ -704,6 +732,7 @@ tasksRoute.post('/:id/submit', async (c) => {
   )
 
   if (result.meta.changes === 0) {
+    audit({ timestamp: new Date().toISOString(), method: 'POST', path: `/tasks/${taskId}/submit`, status: 409, task_id: taskId, agent: task.claimed_by || undefined, detail: 'race or wrong state' })
     return c.json({ error: 'Failed to submit task (race or wrong state)' }, 409)
   }
 
@@ -731,6 +760,19 @@ tasksRoute.post('/:id/submit', async (c) => {
   }
 
   const updatedTask = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
+
+  audit({
+    timestamp: new Date().toISOString(),
+    method: 'POST',
+    path: `/tasks/${taskId}/submit`,
+    status: 200,
+    task_id: taskId,
+    agent: task.claimed_by || undefined,
+    scope: task.scope || undefined,
+    queue_from: 'claimed',
+    queue_to: targetQueue,
+    detail: burnoutDetected ? `burnout: ${body.turns_used} turns, ${body.commits_count} commits` : undefined,
+  })
 
   return c.json(updatedTask)
 })
