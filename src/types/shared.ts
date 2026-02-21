@@ -466,6 +466,48 @@ export interface MessageListResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Action types (from shared/src/action.ts)
+// ---------------------------------------------------------------------------
+
+export type ActionStatus = 'proposed' | 'execute_requested' | 'executing' | 'completed' | 'failed' | 'expired'
+
+export interface Action {
+  id: string
+  entity_type: string
+  entity_id: string
+  action_type: string
+  label: string
+  description?: string | null
+  status: ActionStatus
+  proposed_by: string
+  proposed_at: string
+  executed_at?: string | null
+  result?: string | null
+  expires_at?: string | null
+  metadata?: string | null
+  scope: string
+}
+
+export interface CreateActionRequest {
+  entity_type: string
+  entity_id: string
+  action_type: string
+  label: string
+  description?: string
+  proposed_by: string
+  expires_at?: string
+  metadata?: string
+  scope: string
+}
+
+export interface ActionListResponse {
+  actions: Action[]
+  total: number
+  offset: number
+  limit: number
+}
+
+// ---------------------------------------------------------------------------
 // State machine types (from shared/src/state-machine.ts)
 // NOTE: VALID_TRANSITIONS const is NOT copied — the server defines its own
 // TRANSITIONS in src/state-machine.ts.

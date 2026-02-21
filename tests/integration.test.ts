@@ -1132,4 +1132,356 @@ describe('Server Integration Tests', () => {
       expect(data.total).toBe(0)
     })
   })
+
+  describe('Actions', () => {
+    const ACTION_SCOPE = `actions-${Date.now()}`
+
+    it('should create an action', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entity_type: 'task',
+          entity_id: 'task-123',
+          action_type: 'merge_pr',
+          label: 'Merge PR #42',
+          description: 'Merge the pull request after CI passes',
+          proposed_by: 'agent-1',
+          scope: ACTION_SCOPE,
+        }),
+      })
+
+      expect(response.status).toBe(201)
+      const data = await response.json() as any
+      expect(data.id).toBeDefined()
+      expect(data.id).toMatch(/^act-/)
+      expect(data.entity_type).toBe('task')
+      expect(data.entity_id).toBe('task-123')
+      expect(data.action_type).toBe('merge_pr')
+      expect(data.label).toBe('Merge PR #42')
+      expect(data.description).toBe('Merge the pull request after CI passes')
+      expect(data.status).toBe('proposed')
+      expect(data.proposed_by).toBe('agent-1')
+      expect(data.proposed_at).toBeDefined()
+      expect(data.scope).toBe(ACTION_SCOPE)
+    })
+
+    it('should reject action creation without scope', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entity_type: 'task',
+          entity_id: 'task-123',
+          action_type: 'merge_pr',
+          label: 'Merge PR',
+          proposed_by: 'agent-1',
+        }),
+      })
+
+      expect(response.status).toBe(400)
+      const data = await response.json() as any
+      expect(data.error).toContain('scope')
+    })
+
+    it('should reject action creation without required fields', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entity_type: 'task',
+          scope: ACTION_SCOPE,
+        }),
+      })
+
+      expect(response.status).toBe(400)
+      const data = await response.json() as any
+      expect(data.error).toContain('Missing required fields')
+    })
+
+    it('should list actions with scope', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/actions?scope=${ACTION_SCOPE}`)
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.actions.length).toBeGreaterThanOrEqual(1)
+      expect(data.total).toBeGreaterThanOrEqual(1)
+      expect(data.offset).toBe(0)
+      expect(data.limit).toBe(50)
+    })
+
+    it('should reject listing without scope', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/actions`)
+      expect(response.status).toBe(400)
+      const data = await response.json() as any
+      expect(data.error).toContain('scope')
+    })
+
+    it('should filter actions by entity_type and entity_id', async () => {
+      // Create a second action with different entity
+      await fetch(`${baseUrl}/api/v1/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entity_type: 'project',
+          entity_id: 'proj-456',
+          action_type: 'deploy',
+          label: 'Deploy to staging',
+          proposed_by: 'agent-2',
+          scope: ACTION_SCOPE,
+        }),
+      })
+
+      const response = await fetch(
+        `${baseUrl}/api/v1/actions?entity_type=task&entity_id=task-123&scope=${ACTION_SCOPE}`
+      )
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.actions.length).toBeGreaterThanOrEqual(1)
+      data.actions.forEach((action: any) => {
+        expect(action.entity_type).toBe('task')
+        expect(action.entity_id).toBe('task-123')
+      })
+    })
+
+    it('should filter actions by status', async () => {
+      const response = await fetch(
+        `${baseUrl}/api/v1/actions?status=proposed&scope=${ACTION_SCOPE}`
+      )
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      data.actions.forEach((action: any) => {
+        expect(action.status).toBe('proposed')
+      })
+    })
+
+    it('should execute an action', async () => {
+      // Create an action to execute
+      const createResponse = await fetch(`${baseUrl}/api/v1/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entity_type: 'task',
+          entity_id: 'task-exec',
+          action_type: 'merge_pr',
+          label: 'Merge PR #99',
+          proposed_by: 'agent-1',
+          scope: ACTION_SCOPE,
+        }),
+      })
+      const created = await createResponse.json() as any
+
+      // Execute it
+      const response = await fetch(`${baseUrl}/api/v1/actions/${created.id}/execute`, {
+        method: 'POST',
+      })
+
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.status).toBe('execute_requested')
+      expect(data.executed_at).toBeDefined()
+    })
+
+    it('should reject executing a non-proposed action', async () => {
+      // Create and execute an action first
+      const createResponse = await fetch(`${baseUrl}/api/v1/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entity_type: 'task',
+          entity_id: 'task-double-exec',
+          action_type: 'merge_pr',
+          label: 'Merge PR #100',
+          proposed_by: 'agent-1',
+          scope: ACTION_SCOPE,
+        }),
+      })
+      const created = await createResponse.json() as any
+
+      await fetch(`${baseUrl}/api/v1/actions/${created.id}/execute`, {
+        method: 'POST',
+      })
+
+      // Try to execute again
+      const response = await fetch(`${baseUrl}/api/v1/actions/${created.id}/execute`, {
+        method: 'POST',
+      })
+
+      expect(response.status).toBe(400)
+      const data = await response.json() as any
+      expect(data.error).toContain('execute_requested')
+    })
+
+    it('should return 404 for executing non-existent action', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/actions/nonexistent/execute`, {
+        method: 'POST',
+      })
+      expect(response.status).toBe(404)
+    })
+
+    it('should complete an action lifecycle via PATCH', async () => {
+      // Create action
+      const createResponse = await fetch(`${baseUrl}/api/v1/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entity_type: 'task',
+          entity_id: 'task-lifecycle',
+          action_type: 'deploy',
+          label: 'Deploy to prod',
+          proposed_by: 'agent-1',
+          scope: ACTION_SCOPE,
+        }),
+      })
+      const created = await createResponse.json() as any
+
+      // Execute
+      await fetch(`${baseUrl}/api/v1/actions/${created.id}/execute`, {
+        method: 'POST',
+      })
+
+      // Mark as executing
+      const execResponse = await fetch(`${baseUrl}/api/v1/actions/${created.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'executing' }),
+      })
+      expect(execResponse.status).toBe(200)
+      const execData = await execResponse.json() as any
+      expect(execData.status).toBe('executing')
+
+      // Complete with result
+      const completeResponse = await fetch(`${baseUrl}/api/v1/actions/${created.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'completed', result: 'Deployed successfully to v1.2.3' }),
+      })
+      expect(completeResponse.status).toBe(200)
+      const completeData = await completeResponse.json() as any
+      expect(completeData.status).toBe('completed')
+      expect(completeData.result).toBe('Deployed successfully to v1.2.3')
+    })
+
+    it('should fail an action lifecycle via PATCH', async () => {
+      // Create action
+      const createResponse = await fetch(`${baseUrl}/api/v1/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entity_type: 'task',
+          entity_id: 'task-fail',
+          action_type: 'deploy',
+          label: 'Deploy to prod',
+          proposed_by: 'agent-1',
+          scope: ACTION_SCOPE,
+        }),
+      })
+      const created = await createResponse.json() as any
+
+      // Execute then fail
+      await fetch(`${baseUrl}/api/v1/actions/${created.id}/execute`, {
+        method: 'POST',
+      })
+
+      const failResponse = await fetch(`${baseUrl}/api/v1/actions/${created.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'failed', result: 'Deployment timed out' }),
+      })
+      expect(failResponse.status).toBe(200)
+      const failData = await failResponse.json() as any
+      expect(failData.status).toBe('failed')
+      expect(failData.result).toBe('Deployment timed out')
+    })
+
+    it('should reject PATCH with invalid status', async () => {
+      const createResponse = await fetch(`${baseUrl}/api/v1/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entity_type: 'task',
+          entity_id: 'task-invalid',
+          action_type: 'merge_pr',
+          label: 'Merge',
+          proposed_by: 'agent-1',
+          scope: ACTION_SCOPE,
+        }),
+      })
+      const created = await createResponse.json() as any
+
+      const response = await fetch(`${baseUrl}/api/v1/actions/${created.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'bogus' }),
+      })
+      expect(response.status).toBe(400)
+      const data = await response.json() as any
+      expect(data.error).toContain('Invalid status')
+    })
+
+    it('should return 404 for PATCH on non-existent action', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/actions/nonexistent`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'completed' }),
+      })
+      expect(response.status).toBe(404)
+    })
+
+    it('should exclude expired actions from listing', async () => {
+      // Create an action that is already expired
+      const createResponse = await fetch(`${baseUrl}/api/v1/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entity_type: 'task',
+          entity_id: 'task-expired',
+          action_type: 'merge_pr',
+          label: 'Expired action',
+          proposed_by: 'agent-1',
+          expires_at: '2020-01-01T00:00:00Z',
+          scope: ACTION_SCOPE,
+        }),
+      })
+      const created = await createResponse.json() as any
+
+      // List actions - expired one should not appear
+      const response = await fetch(`${baseUrl}/api/v1/actions?scope=${ACTION_SCOPE}`)
+      const data = await response.json() as any
+      const expiredAction = data.actions.find((a: any) => a.id === created.id)
+      expect(expiredAction).toBeUndefined()
+    })
+
+    it('should reject executing an expired action', async () => {
+      const createResponse = await fetch(`${baseUrl}/api/v1/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entity_type: 'task',
+          entity_id: 'task-expired-exec',
+          action_type: 'merge_pr',
+          label: 'Expired exec action',
+          proposed_by: 'agent-1',
+          expires_at: '2020-01-01T00:00:00Z',
+          scope: ACTION_SCOPE,
+        }),
+      })
+      const created = await createResponse.json() as any
+
+      const response = await fetch(`${baseUrl}/api/v1/actions/${created.id}/execute`, {
+        method: 'POST',
+      })
+      expect(response.status).toBe(400)
+      const data = await response.json() as any
+      expect(data.error).toContain('expired')
+    })
+
+    it('should enforce scope isolation on actions', async () => {
+      const OTHER_SCOPE = `actions-other-${Date.now()}`
+      const response = await fetch(`${baseUrl}/api/v1/actions?scope=${OTHER_SCOPE}`)
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.actions.length).toBe(0)
+      expect(data.total).toBe(0)
+    })
+  })
 })
