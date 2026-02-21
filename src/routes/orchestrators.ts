@@ -109,7 +109,12 @@ orchestratorsRoute.post('/register', async (c) => {
 orchestratorsRoute.post('/:id/heartbeat', async (c) => {
   const db = c.env.DB
   const orchestratorId = c.req.param('id')
-  const body = (await c.req.json()) as HeartbeatRequest
+  let body: HeartbeatRequest = {}
+  try {
+    body = await c.req.json()
+  } catch {
+    // Empty body is fine — timestamp defaults to now
+  }
 
   // Check if orchestrator exists
   const orchestrator = await queryOne<Orchestrator>(

@@ -139,6 +139,31 @@ describe('Server Integration Tests', () => {
       const data = await response.json()
       expect(data.success).toBe(true)
     })
+
+    it('should accept heartbeat with empty body', async () => {
+      // Register first
+      await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'test',
+          machine_id: 'test-machine-empty-hb',
+          repo_url: 'https://github.com/test/repo',
+          scope: TEST_SCOPE,
+        }),
+      })
+
+      // Send heartbeat with no body
+      const response = await fetch(
+        `${baseUrl}/api/v1/orchestrators/test-test-machine-empty-hb/heartbeat`,
+        { method: 'POST' }
+      )
+
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.success).toBe(true)
+      expect(data.last_heartbeat).toBeDefined()
+    })
   })
 
   describe('Task CRUD Operations', () => {

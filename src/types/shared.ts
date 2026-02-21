@@ -279,7 +279,7 @@ export interface RegisterOrchestratorResponse {
 }
 
 export interface HeartbeatRequest {
-  timestamp: string
+  timestamp?: string
 }
 
 export interface HeartbeatResponse {
