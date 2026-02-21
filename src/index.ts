@@ -130,17 +130,17 @@ app.onError((err, c) => {
 })
 
 // Export for Cloudflare Workers
-export default app
+export default {
+  fetch: app.fetch,
 
-// Scheduled handler for cron jobs (lease expiration, etc.)
-export async function scheduled(
-  _event: ScheduledEvent,
-  env: Env,
-  _ctx: ExecutionContext
-): Promise<void> {
-  console.log('Scheduled job triggered at:', new Date().toISOString())
+  async scheduled(
+    _event: ScheduledEvent,
+    env: Env,
+    _ctx: ExecutionContext
+  ): Promise<void> {
+    console.log('Scheduled job triggered at:', new Date().toISOString())
 
-  // Import and run scheduled jobs
-  const { runLeaseMonitor } = await import('./scheduled/lease-monitor')
-  await runLeaseMonitor(env.DB)
+    const { runLeaseMonitor } = await import('./scheduled/lease-monitor')
+    await runLeaseMonitor(env.DB)
+  },
 }
