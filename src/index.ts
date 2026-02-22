@@ -61,6 +61,7 @@ app.get('/', (c) => {
       'POST /api/v1/tasks/:id/submit',
       'POST /api/v1/tasks/:id/accept',
       'POST /api/v1/tasks/:id/reject',
+      'POST /api/v1/tasks/:id/requeue',
       'GET  /api/v1/drafts',
       'POST /api/v1/drafts',
       'GET  /api/v1/drafts/:id',

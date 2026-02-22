@@ -902,3 +902,68 @@ tasksRoute.post('/:id/reject', async (c) => {
 
   return c.json(updatedTask)
 })
+
+/**
+ * Requeue task (move back to incoming)
+ * POST /api/v1/tasks/:id/requeue
+ */
+tasksRoute.post('/:id/requeue', async (c) => {
+  const db = c.env.DB
+  const taskId = c.req.param('id')
+
+  // Get current task state
+  const task = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
+  if (!task) {
+    return c.json({ error: 'Task not found', task_id: taskId }, 404)
+  }
+
+  if (task.queue !== 'claimed' && task.queue !== 'provisional') {
+    return c.json(
+      { error: 'Failed to requeue task', details: [`Invalid transition: task is in ${task.queue}, expected claimed or provisional`] },
+      409
+    )
+  }
+
+  // Atomic requeue: move to incoming, clear claim metadata, increment attempt_count
+  const result = await execute(db,
+    `UPDATE tasks
+     SET queue = 'incoming',
+         version = version + 1,
+         claimed_by = NULL,
+         claimed_at = NULL,
+         orchestrator_id = NULL,
+         lease_expires_at = NULL,
+         attempt_count = attempt_count + 1,
+         updated_at = datetime('now')
+     WHERE id = ? AND queue IN ('claimed', 'provisional') AND version = ?`,
+    taskId,
+    task.version
+  )
+
+  if (result.meta.changes === 0) {
+    return c.json({ error: 'Failed to requeue task (race or wrong state)' }, 409)
+  }
+
+  // Side effect: record history
+  await execute(db,
+    `INSERT INTO task_history (task_id, event, agent, timestamp)
+     VALUES (?, ?, ?, datetime('now'))`,
+    taskId, 'requeued', task.claimed_by || null
+  )
+
+  const updatedTask = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
+
+  audit({
+    timestamp: new Date().toISOString(),
+    method: 'POST',
+    path: `/tasks/${taskId}/requeue`,
+    status: 200,
+    task_id: taskId,
+    agent: task.claimed_by || undefined,
+    scope: task.scope || undefined,
+    queue_from: task.queue,
+    queue_to: 'incoming',
+  })
+
+  return c.json(updatedTask)
+})
