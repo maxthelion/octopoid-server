@@ -75,6 +75,9 @@ export interface Task {
   flow?: string | null  // Flow name (e.g. 'default', 'hotfix')
   flow_overrides?: string | null  // JSON object with flow-specific overrides
 
+  // Inline content
+  content?: string | null
+
   // Multi-tenant isolation
   scope?: string | null
 }
@@ -95,6 +98,7 @@ export interface CreateTaskRequest {
   hooks?: string  // JSON array of hook objects
   flow?: string  // Flow name
   flow_overrides?: string  // JSON object with flow-specific overrides
+  content?: string
   scope?: string
   cluster?: string  // Cluster for flow validation
 }
@@ -129,6 +133,7 @@ export interface UpdateTaskRequest {
   hooks?: string  // JSON array of hook objects
   flow?: string  // Flow name
   flow_overrides?: string  // JSON object with flow-specific overrides
+  content?: string
   version?: number
 }
 
