@@ -29,9 +29,9 @@ projectsRoute.post('/', async (c) => {
   const body = await c.req.json<CreateProjectRequest>()
 
   // Validate required fields
-  if (!body.id || !body.title) {
+  if (!body.id || !body.title || !body.branch) {
     return c.json(
-      { error: 'Missing required fields: id, title' },
+      { error: 'Missing required fields: id, title, branch' },
       400
     )
   }

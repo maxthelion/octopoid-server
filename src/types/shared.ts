@@ -209,7 +209,7 @@ export interface CreateProjectRequest {
   title: string
   description?: string
   status?: ProjectStatus
-  branch?: string
+  branch: string
   base_branch?: string
   auto_accept?: boolean
   created_by?: string
