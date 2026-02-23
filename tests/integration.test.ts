@@ -1563,4 +1563,160 @@ describe('Server Integration Tests', () => {
       expect(found.action_data).toBe(actionData)
     })
   })
+
+  describe('Custom Flow Transitions', () => {
+    const FLOW_SCOPE = `flow-transitions-${Date.now()}`
+    const flowOrchId = 'flowtest-flow-orch'
+
+    beforeAll(async () => {
+      // Register orchestrator in 'flowtest' cluster
+      await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'flowtest',
+          machine_id: 'flow-orch',
+          repo_url: 'https://github.com/test/repo',
+          scope: FLOW_SCOPE,
+        }),
+      })
+
+      // Register a custom flow with staging state
+      const flowRes = await fetch(`${baseUrl}/api/v1/flows/custom`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'flowtest',
+          states: ['incoming', 'claimed', 'staging', 'done', 'failed'],
+          transitions: [
+            { from: 'incoming', to: 'claimed' },
+            { from: 'claimed', to: 'staging' },
+            { from: 'staging', to: 'done' },
+            { from: 'staging', to: 'incoming' },
+            { from: 'claimed', to: 'incoming' },
+          ],
+        }),
+      })
+      expect(flowRes.status).toBe(200)
+    })
+
+    async function createStagingTask(taskId: string, scope: string): Promise<void> {
+      // Create task with flow='custom'
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/${taskId}.md`,
+          queue: 'incoming',
+          branch: 'main',
+          flow: 'custom',
+          scope,
+        }),
+      })
+
+      // Claim the task (incoming → claimed)
+      await fetch(`${baseUrl}/api/v1/tasks/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orchestrator_id: flowOrchId,
+          agent_name: 'flow-agent',
+          scope,
+        }),
+      })
+
+      // Advance to staging via PATCH
+      await fetch(`${baseUrl}/api/v1/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queue: 'staging' }),
+      })
+    }
+
+    it('should accept a task from staging when flow allows staging → done', async () => {
+      const taskId = `flow-accept-${Date.now()}`
+      await createStagingTask(taskId, `${FLOW_SCOPE}-accept`)
+
+      const response = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/accept`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accepted_by: 'flow-reviewer' }),
+      })
+
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.queue).toBe('done')
+      expect(data.completed_at).toBeDefined()
+    })
+
+    it('should reject a task from staging when flow allows staging → incoming', async () => {
+      const taskId = `flow-reject-${Date.now()}`
+      await createStagingTask(taskId, `${FLOW_SCOPE}-reject`)
+
+      const response = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Needs work', rejected_by: 'flow-reviewer' }),
+      })
+
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.queue).toBe('incoming')
+    })
+
+    it('should requeue a task from staging when flow allows staging → incoming', async () => {
+      const taskId = `flow-requeue-${Date.now()}`
+      await createStagingTask(taskId, `${FLOW_SCOPE}-requeue`)
+
+      const response = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/requeue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.queue).toBe('incoming')
+    })
+
+    it('should reject accept when flow does not allow the transition', async () => {
+      // Create a task and claim it (incoming → claimed)
+      // The flow does not allow claimed → done (only staging → done)
+      const taskId = `flow-no-accept-${Date.now()}`
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/${taskId}.md`,
+          queue: 'incoming',
+          branch: 'main',
+          flow: 'custom',
+          scope: FLOW_SCOPE,
+        }),
+      })
+
+      // Claim so it gets orchestrator_id (for flow/cluster lookup)
+      await fetch(`${baseUrl}/api/v1/tasks/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orchestrator_id: flowOrchId,
+          agent_name: 'flow-agent',
+          scope: FLOW_SCOPE,
+        }),
+      })
+
+      // Try to accept from 'claimed' — flow only allows staging → done
+      const response = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/accept`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accepted_by: 'flow-reviewer' }),
+      })
+
+      expect(response.status).toBe(409)
+      const data = await response.json() as any
+      expect(data.error).toContain('Failed to accept task')
+    })
+  })
 })

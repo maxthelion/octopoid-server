@@ -20,7 +20,7 @@ import { query, queryOne, execute } from '../database'
 // NOTE: executeTransition/TRANSITIONS from state-machine.ts are no longer used here.
 // These endpoints now use inline atomic UPDATEs with optimistic locking instead.
 import { getConfig } from '../config'
-import { validateQueue } from '../validate-queue'
+import { validateQueue, canTransition } from '../validate-queue'
 import { audit } from '../logger'
 
 export const tasksRoute = new Hono<{ Bindings: Env }>()
@@ -798,9 +798,26 @@ tasksRoute.post('/:id/accept', async (c) => {
     return c.json({ error: 'Task not found', task_id: taskId }, 404)
   }
 
-  if (task.queue !== 'provisional') {
+  // Resolve cluster for flow lookup
+  const flowName = task.flow || 'default'
+  let cluster = 'default'
+  if (task.orchestrator_id) {
+    const orch = await queryOne<{ cluster: string }>(db, 'SELECT cluster FROM orchestrators WHERE id = ?', task.orchestrator_id)
+    if (orch) cluster = orch.cluster
+  }
+
+  const allowed = await canTransition(db, flowName, cluster, task.queue, 'done')
+  if (allowed === null) {
+    // No flow registered — fall back to hardcoded behaviour
+    if (task.queue !== 'provisional') {
+      return c.json(
+        { error: 'Failed to accept task', details: [`Invalid transition: task is in ${task.queue}, expected provisional`] },
+        409
+      )
+    }
+  } else if (!allowed) {
     return c.json(
-      { error: 'Failed to accept task', details: [`Invalid transition: task is in ${task.queue}, expected provisional`] },
+      { error: 'Failed to accept task', details: [`Invalid transition: flow "${flowName}" does not allow ${task.queue} → done`] },
       409
     )
   }
@@ -813,9 +830,10 @@ tasksRoute.post('/:id/accept', async (c) => {
          version = version + 1,
          completed_at = ?,
          updated_at = datetime('now')
-     WHERE id = ? AND queue = 'provisional' AND version = ?`,
+     WHERE id = ? AND queue = ? AND version = ?`,
     completedAt,
     taskId,
+    task.queue,
     task.version
   )
 
@@ -864,9 +882,26 @@ tasksRoute.post('/:id/reject', async (c) => {
     return c.json({ error: 'Task not found', task_id: taskId }, 404)
   }
 
-  if (task.queue !== 'provisional') {
+  // Resolve cluster for flow lookup
+  const flowName = task.flow || 'default'
+  let cluster = 'default'
+  if (task.orchestrator_id) {
+    const orch = await queryOne<{ cluster: string }>(db, 'SELECT cluster FROM orchestrators WHERE id = ?', task.orchestrator_id)
+    if (orch) cluster = orch.cluster
+  }
+
+  const allowed = await canTransition(db, flowName, cluster, task.queue, 'incoming')
+  if (allowed === null) {
+    // No flow registered — fall back to hardcoded behaviour
+    if (task.queue !== 'provisional') {
+      return c.json(
+        { error: 'Failed to reject task', details: [`Invalid transition: task is in ${task.queue}, expected provisional`] },
+        409
+      )
+    }
+  } else if (!allowed) {
     return c.json(
-      { error: 'Failed to reject task', details: [`Invalid transition: task is in ${task.queue}, expected provisional`] },
+      { error: 'Failed to reject task', details: [`Invalid transition: flow "${flowName}" does not allow ${task.queue} → incoming`] },
       409
     )
   }
@@ -882,8 +917,9 @@ tasksRoute.post('/:id/reject', async (c) => {
          orchestrator_id = NULL,
          lease_expires_at = NULL,
          updated_at = datetime('now')
-     WHERE id = ? AND queue = 'provisional' AND version = ?`,
+     WHERE id = ? AND queue = ? AND version = ?`,
     taskId,
+    task.queue,
     task.version
   )
 
@@ -917,9 +953,26 @@ tasksRoute.post('/:id/requeue', async (c) => {
     return c.json({ error: 'Task not found', task_id: taskId }, 404)
   }
 
-  if (task.queue !== 'claimed' && task.queue !== 'provisional') {
+  // Resolve cluster for flow lookup
+  const flowName = task.flow || 'default'
+  let cluster = 'default'
+  if (task.orchestrator_id) {
+    const orch = await queryOne<{ cluster: string }>(db, 'SELECT cluster FROM orchestrators WHERE id = ?', task.orchestrator_id)
+    if (orch) cluster = orch.cluster
+  }
+
+  const allowed = await canTransition(db, flowName, cluster, task.queue, 'incoming')
+  if (allowed === null) {
+    // No flow registered — fall back to hardcoded behaviour
+    if (task.queue !== 'claimed' && task.queue !== 'provisional') {
+      return c.json(
+        { error: 'Failed to requeue task', details: [`Invalid transition: task is in ${task.queue}, expected claimed or provisional`] },
+        409
+      )
+    }
+  } else if (!allowed) {
     return c.json(
-      { error: 'Failed to requeue task', details: [`Invalid transition: task is in ${task.queue}, expected claimed or provisional`] },
+      { error: 'Failed to requeue task', details: [`Invalid transition: flow "${flowName}" does not allow ${task.queue} → incoming`] },
       409
     )
   }
@@ -935,8 +988,9 @@ tasksRoute.post('/:id/requeue', async (c) => {
          lease_expires_at = NULL,
          attempt_count = attempt_count + 1,
          updated_at = datetime('now')
-     WHERE id = ? AND queue IN ('claimed', 'provisional') AND version = ?`,
+     WHERE id = ? AND queue = ? AND version = ?`,
     taskId,
+    task.queue,
     task.version
   )
 

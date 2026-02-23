@@ -40,3 +40,34 @@ export async function validateQueue(
 
   return `Invalid queue "${queue}". Valid queues for flow "${flowName}": ${validStates.join(', ')}`
 }
+
+/**
+ * Check whether a flow allows a specific queue transition.
+ *
+ * Returns:
+ *   null  – no flow registered → caller should use hardcoded fallback
+ *   true  – flow exists and the transition is allowed
+ *   false – flow exists but the transition is NOT allowed
+ */
+export async function canTransition(
+  db: D1Database,
+  flowName: string,
+  cluster: string,
+  fromQueue: string,
+  toQueue: string
+): Promise<boolean | null> {
+  let flow: { transitions: string } | null
+  try {
+    flow = await queryOne<{ transitions: string }>(
+      db,
+      'SELECT transitions FROM flows WHERE name = ? AND cluster = ?',
+      flowName, cluster
+    )
+  } catch {
+    return null // table doesn't exist yet
+  }
+  if (!flow) return null // no flow registered
+
+  const transitions: Array<{ from: string; to: string }> = JSON.parse(flow.transitions)
+  return transitions.some(t => t.from === fromQueue && t.to === toQueue)
+}
