@@ -13,6 +13,7 @@ import type {
 } from '../types/shared.js'
 import type { Env } from '../index'
 import { query, queryOne, execute } from '../database'
+import { generateApiKey, hashKey, getAuthenticatedScope } from '../middleware/auth'
 
 export const orchestratorsRoute = new Hono<{ Bindings: Env }>()
 
@@ -93,10 +94,37 @@ orchestratorsRoute.post('/register', async (c) => {
     )
   }
 
+  // API key handling: issue key on first scope registration
+  let apiKey: string | undefined
+  const existingKey = await queryOne<{ key_hash: string }>(
+    db,
+    'SELECT key_hash FROM api_keys WHERE scope = ?',
+    body.scope
+  )
+
+  if (!existingKey) {
+    // First registration for this scope — generate and store API key
+    apiKey = generateApiKey()
+    const keyHash = await hashKey(apiKey)
+    await execute(
+      db,
+      'INSERT INTO api_keys (key_hash, scope) VALUES (?, ?)',
+      keyHash,
+      body.scope
+    )
+  } else {
+    // Scope has a key — validate auth if provided
+    const authScope = getAuthenticatedScope(c)
+    if (authScope && authScope !== body.scope) {
+      return c.json({ error: `Scope mismatch: authenticated as "${authScope}" but registering for "${body.scope}"` }, 403)
+    }
+  }
+
   const response: RegisterOrchestratorResponse = {
     orchestrator_id: orchestratorId,
     registered_at: now,
     status: 'active',
+    ...(apiKey ? { api_key: apiKey } : {}),
   }
 
   return c.json(response, existing ? 200 : 201)
@@ -246,4 +274,40 @@ orchestratorsRoute.patch('/:id', async (c) => {
   )
 
   return c.json(orchestrator)
+})
+
+/**
+ * Rotate API key for a scope
+ * POST /api/v1/orchestrators/scopes/:scope/rotate-key
+ */
+orchestratorsRoute.post('/scopes/:scope/rotate-key', async (c) => {
+  const db = c.env.DB
+  const scope = c.req.param('scope')
+
+  // Must be authenticated for this scope
+  const authScope = getAuthenticatedScope(c)
+  if (!authScope) {
+    return c.json({ error: 'Authentication required. Provide your current API key in the Authorization header.' }, 401)
+  }
+  if (authScope !== scope) {
+    return c.json({ error: `Scope mismatch: authenticated as "${authScope}" but rotating key for "${scope}"` }, 403)
+  }
+
+  // Generate new key
+  const newKey = generateApiKey()
+  const newHash = await hashKey(newKey)
+
+  // Replace the old key hash
+  const result = await execute(
+    db,
+    'UPDATE api_keys SET key_hash = ?, last_used_at = NULL WHERE scope = ?',
+    newHash,
+    scope
+  )
+
+  if (result.meta.changes === 0) {
+    return c.json({ error: 'No API key found for this scope' }, 404)
+  }
+
+  return c.json({ api_key: newKey, scope })
 })

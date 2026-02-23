@@ -147,6 +147,7 @@ npx wrangler d1 migrations create octopoid-db <description>
 | `POST` | `/api/v1/orchestrators/:id/heartbeat` | Send heartbeat |
 | `GET` | `/api/v1/orchestrators` | List all orchestrators |
 | `GET` | `/api/v1/orchestrators/:id` | Get orchestrator by ID |
+| `POST` | `/api/v1/orchestrators/scopes/:scope/rotate-key` | Rotate API key for a scope |
 
 ### Tasks
 
@@ -161,6 +162,7 @@ npx wrangler d1 migrations create octopoid-db <description>
 | `POST` | `/api/v1/tasks/:id/submit` | Submit task for review |
 | `POST` | `/api/v1/tasks/:id/accept` | Accept a submitted task |
 | `POST` | `/api/v1/tasks/:id/reject` | Reject with feedback |
+| `POST` | `/api/v1/tasks/:id/requeue` | Requeue a claimed/provisional task |
 
 ### Drafts
 
@@ -203,6 +205,58 @@ curl /api/v1/tasks?scope=my-project
 # Claim within a scope
 curl -X POST /api/v1/tasks/claim -d '{"orchestrator_id": "...", "agent_name": "...", "scope": "my-project"}'
 ```
+
+## Authentication
+
+Scopes can be secured with API keys. Keys are issued automatically on first orchestrator registration for a scope.
+
+### How it works
+
+1. **First registration** for a scope returns an `api_key` (prefixed with `oct_`). Save it — it's only shown once.
+2. **Subsequent requests** to that scope can include the key in the `Authorization` header.
+3. **Unauthenticated access** continues to work — auth is currently opt-in. When a key is provided, the server validates it and checks scope matches, but unauthenticated requests are not blocked.
+
+### Adopting API keys (for existing deployments)
+
+If you're already running orchestrators, here's what happens after you deploy this update:
+
+- **Nothing changes immediately.** Existing scopes have no keys, and all requests continue to work without auth.
+- **Next time an orchestrator registers**, the response will include a new `api_key` field. Save this key.
+- **Auth is optional for now.** You can start passing the key in requests whenever you're ready. There's no deadline — unauthenticated requests still work.
+- **If you pass a key, it must be valid.** Invalid keys return 401, and a key for the wrong scope returns 403. But omitting the key entirely is fine.
+- **A future update will enforce auth** for scopes that have keys. You'll have time to update your clients before that happens.
+
+### Migration checklist
+
+1. Deploy the server update (applies the `api_keys` migration)
+2. Re-register your orchestrator — save the `api_key` from the response
+3. Update your client config to pass `Authorization: Bearer <key>` on requests
+4. Verify everything works with auth headers
+5. (Future) Auth enforcement will be enabled in a later release
+
+```bash
+# Register orchestrator — first time for this scope returns an API key
+curl -X POST /api/v1/orchestrators/register \
+  -H 'Content-Type: application/json' \
+  -d '{"cluster": "prod", "machine_id": "mac-1", "repo_url": "...", "scope": "my-project"}'
+# Response: { "orchestrator_id": "prod-mac-1", "api_key": "oct_a1b2c3...", ... }
+
+# Use the key for all subsequent requests
+curl /api/v1/tasks?scope=my-project \
+  -H 'Authorization: Bearer oct_a1b2c3...'
+
+# Rotate key (requires current key)
+curl -X POST /api/v1/orchestrators/scopes/my-project/rotate-key \
+  -H 'Authorization: Bearer oct_a1b2c3...'
+# Response: { "api_key": "oct_d4e5f6...", "scope": "my-project" }
+```
+
+### Key details
+
+- Keys are stored as SHA-256 hashes — the raw key is never persisted
+- Keys use the `oct_` prefix for easy identification by secret scanners
+- One key per scope (rotating replaces the old key)
+- If you provide a key, it must be valid — but omitting the key is allowed (for now)
 
 ## Environment Variables / Secrets
 
