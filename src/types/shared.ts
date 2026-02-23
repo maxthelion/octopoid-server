@@ -281,6 +281,7 @@ export interface RegisterOrchestratorResponse {
   orchestrator_id: string
   registered_at: string
   status: OrchestratorStatus
+  api_key?: string  // Only returned on first registration for a scope
 }
 
 export interface HeartbeatRequest {

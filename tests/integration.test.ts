@@ -7,11 +7,19 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { unstable_dev } from 'wrangler'
 import type { UnstableDevWorker } from 'wrangler'
 
-const TEST_SCOPE = 'test-scope'
+const TEST_SCOPE = `test-scope-${Date.now()}`
 
 describe('Server Integration Tests', () => {
   let worker: UnstableDevWorker
   let baseUrl: string
+  // API keys issued on first orchestrator registration per scope
+  const scopeKeys: Record<string, string> = {}
+
+  /** Helper: return auth headers for a scope that has a key */
+  function authHeaders(scope: string): Record<string, string> {
+    const key = scopeKeys[scope]
+    return key ? { 'Authorization': `Bearer ${key}` } : {}
+  }
 
   beforeAll(async () => {
     // Start wrangler dev server for testing
@@ -60,6 +68,11 @@ describe('Server Integration Tests', () => {
       expect([200, 201]).toContain(response.status)
       expect(data.orchestrator_id).toBe('test-test-machine-1')
       expect(data.registered_at).toBeDefined()
+
+      // Capture API key for use in subsequent tests
+      if (data.api_key) {
+        scopeKeys[TEST_SCOPE] = data.api_key
+      }
     })
 
     it('should return existing orchestrator on re-registration', async () => {
@@ -209,7 +222,9 @@ describe('Server Integration Tests', () => {
     })
 
     it('should list tasks with scope', async () => {
-      const response = await fetch(`${baseUrl}/api/v1/tasks?scope=${TEST_SCOPE}`)
+      const response = await fetch(`${baseUrl}/api/v1/tasks?scope=${TEST_SCOPE}`, {
+        headers: authHeaders(TEST_SCOPE),
+      })
       const data = await response.json()
 
       expect(response.status).toBe(200)
@@ -226,7 +241,9 @@ describe('Server Integration Tests', () => {
     })
 
     it('should filter tasks by queue', async () => {
-      const response = await fetch(`${baseUrl}/api/v1/tasks?queue=incoming&scope=${TEST_SCOPE}`)
+      const response = await fetch(`${baseUrl}/api/v1/tasks?queue=incoming&scope=${TEST_SCOPE}`, {
+        headers: authHeaders(TEST_SCOPE),
+      })
       const data = await response.json()
 
       expect(response.status).toBe(200)
@@ -898,7 +915,8 @@ describe('Server Integration Tests', () => {
 
     it('should accept explicit scope query param as fallback', async () => {
       const response = await fetch(
-        `${baseUrl}/api/v1/scheduler/poll?scope=${TEST_SCOPE}`
+        `${baseUrl}/api/v1/scheduler/poll?scope=${TEST_SCOPE}`,
+        { headers: authHeaders(TEST_SCOPE) }
       )
       const data = await response.json() as any
 
@@ -918,12 +936,12 @@ describe('Server Integration Tests', () => {
   })
 
   describe('Scope Isolation', () => {
-    const SCOPE_A = 'scope-a'
-    const SCOPE_B = 'scope-b'
+    const SCOPE_A = `scope-a-${Date.now()}`
+    const SCOPE_B = `scope-b-${Date.now()}`
 
     beforeAll(async () => {
-      // Register orchestrators for each scope
-      await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+      // Register orchestrators for each scope and capture keys
+      const regA = await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -933,7 +951,10 @@ describe('Server Integration Tests', () => {
           scope: SCOPE_A,
         }),
       })
-      await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+      const dataA = await regA.json() as any
+      if (dataA.api_key) scopeKeys[SCOPE_A] = dataA.api_key
+
+      const regB = await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -943,6 +964,8 @@ describe('Server Integration Tests', () => {
           scope: SCOPE_B,
         }),
       })
+      const dataB = await regB.json() as any
+      if (dataB.api_key) scopeKeys[SCOPE_B] = dataB.api_key
     })
 
     it('should not claim tasks from a different scope', async () => {
@@ -950,7 +973,7 @@ describe('Server Integration Tests', () => {
       const taskId = `test-iso-${Date.now()}`
       await fetch(`${baseUrl}/api/v1/tasks`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders(SCOPE_A) },
         body: JSON.stringify({
           id: taskId,
           file_path: `tasks/${taskId}.md`,
@@ -963,7 +986,7 @@ describe('Server Integration Tests', () => {
       // Try to claim with scope B — should find nothing
       const response = await fetch(`${baseUrl}/api/v1/tasks/claim`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders(SCOPE_B) },
         body: JSON.stringify({
           orchestrator_id: 'test-iso-b',
           agent_name: 'agent-b',
@@ -977,7 +1000,9 @@ describe('Server Integration Tests', () => {
     })
 
     it('should not list tasks from a different scope', async () => {
-      const response = await fetch(`${baseUrl}/api/v1/tasks?scope=${SCOPE_B}`)
+      const response = await fetch(`${baseUrl}/api/v1/tasks?scope=${SCOPE_B}`, {
+        headers: authHeaders(SCOPE_B),
+      })
       const data = await response.json()
 
       expect(response.status).toBe(200)
@@ -1717,6 +1742,232 @@ describe('Server Integration Tests', () => {
       expect(response.status).toBe(409)
       const data = await response.json() as any
       expect(data.error).toContain('Failed to accept task')
+    })
+  })
+
+  describe('Authentication', () => {
+    const AUTH_SCOPE = `auth-test-${Date.now()}`
+    let apiKey: string
+
+    it('should issue API key on first orchestrator registration for a scope', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'test',
+          machine_id: 'auth-test-1',
+          repo_url: 'https://github.com/test/repo',
+          scope: AUTH_SCOPE,
+        }),
+      })
+
+      const data = await response.json() as any
+      expect([200, 201]).toContain(response.status)
+      expect(data.api_key).toBeDefined()
+      expect(data.api_key).toMatch(/^oct_/)
+      apiKey = data.api_key
+    })
+
+    it('should not issue a new key on re-registration for same scope', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'test',
+          machine_id: 'auth-test-1',
+          repo_url: 'https://github.com/test/repo',
+          scope: AUTH_SCOPE,
+        }),
+      })
+
+      const data = await response.json() as any
+      expect(response.status).toBe(200)
+      expect(data.api_key).toBeUndefined()
+    })
+
+    it('should allow authenticated requests with valid key', async () => {
+      // Create a task using the API key
+      const taskId = `auth-task-${Date.now()}`
+      const createResponse = await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/${taskId}.md`,
+          branch: 'main',
+          scope: AUTH_SCOPE,
+        }),
+      })
+
+      expect(createResponse.status).toBe(201)
+
+      // List tasks using the API key
+      const listResponse = await fetch(
+        `${baseUrl}/api/v1/tasks?scope=${AUTH_SCOPE}`,
+        { headers: { 'Authorization': `Bearer ${apiKey}` } }
+      )
+      expect(listResponse.status).toBe(200)
+      const listData = await listResponse.json() as any
+      expect(listData.tasks.length).toBeGreaterThanOrEqual(1)
+    })
+
+    it('should reject requests with invalid key', async () => {
+      const response = await fetch(
+        `${baseUrl}/api/v1/tasks?scope=${AUTH_SCOPE}`,
+        { headers: { 'Authorization': 'Bearer oct_invalid_key_that_does_not_exist' } }
+      )
+      expect(response.status).toBe(401)
+      const data = await response.json() as any
+      expect(data.error).toContain('Invalid API key')
+    })
+
+    it('should reject requests with malformed Authorization header', async () => {
+      const response = await fetch(
+        `${baseUrl}/api/v1/tasks?scope=${AUTH_SCOPE}`,
+        { headers: { 'Authorization': 'Basic dXNlcjpwYXNz' } }
+      )
+      expect(response.status).toBe(401)
+    })
+
+    it('should reject requests with non-oct_ prefixed key', async () => {
+      const response = await fetch(
+        `${baseUrl}/api/v1/tasks?scope=${AUTH_SCOPE}`,
+        { headers: { 'Authorization': 'Bearer some_random_key' } }
+      )
+      expect(response.status).toBe(401)
+      const data = await response.json() as any
+      expect(data.error).toContain('oct_')
+    })
+
+    it('should allow unauthenticated access to a scope with a key (no enforcement yet)', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/tasks?scope=${AUTH_SCOPE}`)
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.tasks).toBeDefined()
+    })
+
+    it('should reject authenticated requests for wrong scope', async () => {
+      const OTHER_AUTH_SCOPE = `auth-other-${Date.now()}`
+      // Register another scope to get a different key
+      const regResponse = await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'test',
+          machine_id: 'auth-other-1',
+          repo_url: 'https://github.com/test/repo',
+          scope: OTHER_AUTH_SCOPE,
+        }),
+      })
+      const regData = await regResponse.json() as any
+      const otherKey = regData.api_key
+
+      // Try to access first scope with second scope's key
+      const response = await fetch(
+        `${baseUrl}/api/v1/tasks?scope=${AUTH_SCOPE}`,
+        { headers: { 'Authorization': `Bearer ${otherKey}` } }
+      )
+      expect(response.status).toBe(403)
+      const data = await response.json() as any
+      expect(data.error).toContain('mismatch')
+    })
+
+    it('should reject authenticated POST with wrong scope in body', async () => {
+      const taskId = `auth-body-mismatch-${Date.now()}`
+      const response = await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/${taskId}.md`,
+          branch: 'main',
+          scope: 'some-other-scope',
+        }),
+      })
+      expect(response.status).toBe(403)
+      const data = await response.json() as any
+      expect(data.error).toContain('mismatch')
+    })
+
+    it('should allow unauthenticated access to scopes without keys', async () => {
+      const NO_KEY_SCOPE = `no-key-${Date.now()}`
+      // List tasks for a scope that has no key — should work
+      const response = await fetch(`${baseUrl}/api/v1/tasks?scope=${NO_KEY_SCOPE}`)
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.tasks).toBeDefined()
+    })
+
+    it('should rotate key successfully', async () => {
+      const response = await fetch(
+        `${baseUrl}/api/v1/orchestrators/scopes/${AUTH_SCOPE}/rotate-key`,
+        {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        }
+      )
+
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.api_key).toBeDefined()
+      expect(data.api_key).toMatch(/^oct_/)
+      expect(data.api_key).not.toBe(apiKey)
+      expect(data.scope).toBe(AUTH_SCOPE)
+
+      const newKey = data.api_key
+
+      // Old key should no longer work
+      const oldKeyResponse = await fetch(
+        `${baseUrl}/api/v1/tasks?scope=${AUTH_SCOPE}`,
+        { headers: { 'Authorization': `Bearer ${apiKey}` } }
+      )
+      expect(oldKeyResponse.status).toBe(401)
+
+      // New key should work
+      const newKeyResponse = await fetch(
+        `${baseUrl}/api/v1/tasks?scope=${AUTH_SCOPE}`,
+        { headers: { 'Authorization': `Bearer ${newKey}` } }
+      )
+      expect(newKeyResponse.status).toBe(200)
+    })
+
+    it('should reject key rotation without authentication', async () => {
+      const response = await fetch(
+        `${baseUrl}/api/v1/orchestrators/scopes/${AUTH_SCOPE}/rotate-key`,
+        { method: 'POST' }
+      )
+      expect(response.status).toBe(401)
+    })
+
+    it('should reject key rotation for wrong scope', async () => {
+      const ROTATE_SCOPE = `rotate-test-${Date.now()}`
+      const regResponse = await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'test',
+          machine_id: 'rotate-test-1',
+          repo_url: 'https://github.com/test/repo',
+          scope: ROTATE_SCOPE,
+        }),
+      })
+      const regData = await regResponse.json() as any
+
+      // Try to rotate AUTH_SCOPE key using ROTATE_SCOPE key
+      const response = await fetch(
+        `${baseUrl}/api/v1/orchestrators/scopes/${AUTH_SCOPE}/rotate-key`,
+        {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${regData.api_key}` },
+        }
+      )
+      expect(response.status).toBe(403)
     })
   })
 })

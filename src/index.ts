@@ -18,11 +18,18 @@ export interface Env {
   API_SECRET_KEY?: string     // For admin endpoints
 }
 
+// Context variables set by middleware
+export interface AppVariables {
+  authScope?: string
+}
+
 // Create Hono app with typed environment
-const app = new Hono<{ Bindings: Env }>()
+const app = new Hono<{ Bindings: Env; Variables: AppVariables }>()
 
 // Middleware
 app.use('/*', cors())
+import { authMiddleware } from './middleware/auth'
+app.use('/api/v1/*', authMiddleware)
 
 // Health check endpoint
 app.get('/api/health', async (c) => {
@@ -87,6 +94,7 @@ app.get('/', (c) => {
       'GET  /api/v1/actions',
       'POST /api/v1/actions/:id/execute',
       'PATCH /api/v1/actions/:id',
+      'POST /api/v1/orchestrators/scopes/:scope/rotate-key',
     ],
   })
 })
