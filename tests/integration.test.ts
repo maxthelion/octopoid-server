@@ -1171,6 +1171,120 @@ describe('Server Integration Tests', () => {
       expect(data.error).toContain('scope')
     })
 
+    it('should create a message with parent_message_id', async () => {
+      // Create parent message
+      const parentResponse = await fetch(`${baseUrl}/api/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: taskId,
+          from_actor: 'orchestrator',
+          type: 'question',
+          content: 'What is the status?',
+          scope: MSG_SCOPE,
+        }),
+      })
+      expect(parentResponse.status).toBe(201)
+      const parent = await parentResponse.json() as any
+
+      // Create child message referencing parent
+      const childResponse = await fetch(`${baseUrl}/api/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: taskId,
+          from_actor: 'agent-1',
+          type: 'answer',
+          content: 'All good!',
+          parent_message_id: parent.id,
+          scope: MSG_SCOPE,
+        }),
+      })
+      expect(childResponse.status).toBe(201)
+      const child = await childResponse.json() as any
+      expect(child.parent_message_id).toBe(parent.id)
+    })
+
+    it('should reject message with non-existent parent_message_id', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: taskId,
+          from_actor: 'agent-1',
+          type: 'answer',
+          content: 'Orphan reply',
+          parent_message_id: 'msg-does-not-exist',
+          scope: MSG_SCOPE,
+        }),
+      })
+      expect(response.status).toBe(400)
+      const data = await response.json() as any
+      expect(data.error).toContain('Parent message not found')
+    })
+
+    it('should return thread via thread_id query', async () => {
+      // Create root message
+      const rootRes = await fetch(`${baseUrl}/api/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: taskId,
+          from_actor: 'orchestrator',
+          type: 'instruction',
+          content: 'Root message',
+          scope: MSG_SCOPE,
+        }),
+      })
+      const root = await rootRes.json() as any
+
+      // Create child
+      const childRes = await fetch(`${baseUrl}/api/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: taskId,
+          from_actor: 'agent-1',
+          type: 'status',
+          content: 'Child message',
+          parent_message_id: root.id,
+          scope: MSG_SCOPE,
+        }),
+      })
+      const child = await childRes.json() as any
+
+      // Create grandchild
+      await fetch(`${baseUrl}/api/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: taskId,
+          from_actor: 'orchestrator',
+          type: 'instruction',
+          content: 'Grandchild message',
+          parent_message_id: child.id,
+          scope: MSG_SCOPE,
+        }),
+      })
+
+      // Query thread
+      const threadRes = await fetch(
+        `${baseUrl}/api/v1/messages?thread_id=${root.id}&scope=${MSG_SCOPE}`
+      )
+      expect(threadRes.status).toBe(200)
+      const threadData = await threadRes.json() as any
+      expect(threadData.messages.length).toBe(3)
+      expect(threadData.messages[0].id).toBe(root.id)
+      expect(threadData.messages[0].content).toBe('Root message')
+      expect(threadData.messages[1].content).toBe('Child message')
+      expect(threadData.messages[2].content).toBe('Grandchild message')
+
+      // Verify ordering by created_at
+      for (let i = 1; i < threadData.messages.length; i++) {
+        expect(threadData.messages[i].created_at >= threadData.messages[i - 1].created_at).toBe(true)
+      }
+    })
+
     it('should enforce scope isolation on messages', async () => {
       const OTHER_SCOPE = `messages-other-${Date.now()}`
       const response = await fetch(

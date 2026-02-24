@@ -37,13 +37,35 @@ messagesRoute.post('/', async (c) => {
     )
   }
 
+  // Validate parent_message_id if provided
+  if (body.parent_message_id) {
+    const parent = await queryOne<{ id: string; task_id: string }>(
+      db,
+      'SELECT id, task_id FROM messages WHERE id = ? AND scope = ?',
+      body.parent_message_id,
+      body.scope
+    )
+    if (!parent) {
+      return c.json(
+        { error: `Parent message not found: ${body.parent_message_id}` },
+        400
+      )
+    }
+    if (parent.task_id !== body.task_id) {
+      return c.json(
+        { error: 'Parent message belongs to a different task' },
+        400
+      )
+    }
+  }
+
   const id = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const now = new Date().toISOString()
 
   await db
     .prepare(
-      `INSERT INTO messages (id, task_id, from_actor, to_actor, type, content, created_at, scope)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO messages (id, task_id, from_actor, to_actor, type, content, parent_message_id, created_at, scope)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       id,
@@ -52,6 +74,7 @@ messagesRoute.post('/', async (c) => {
       body.to_actor || null,
       body.type,
       body.content,
+      body.parent_message_id || null,
       now,
       body.scope
     )
@@ -64,6 +87,7 @@ messagesRoute.post('/', async (c) => {
     to_actor: body.to_actor || null,
     type: body.type,
     content: body.content,
+    parent_message_id: body.parent_message_id || null,
     created_at: now,
     scope: body.scope,
   }
@@ -82,6 +106,7 @@ messagesRoute.get('/', async (c) => {
   const toActor = c.req.query('to_actor')
   const type = c.req.query('type')
   const scopeParam = c.req.query('scope')
+  const threadId = c.req.query('thread_id')
   const limit = parseInt(c.req.query('limit') || '50')
   const offset = parseInt(c.req.query('offset') || '0')
 
@@ -90,6 +115,30 @@ messagesRoute.get('/', async (c) => {
       { error: 'Missing required query parameter: scope. Cannot list messages across all scopes.' },
       400
     )
+  }
+
+  // Thread query: return root message + all descendants via recursive CTE
+  if (threadId) {
+    const results = await query<Message>(
+      db,
+      `WITH RECURSIVE thread AS (
+        SELECT * FROM messages WHERE id = ? AND scope = ?
+        UNION ALL
+        SELECT m.* FROM messages m JOIN thread t ON m.parent_message_id = t.id
+      )
+      SELECT * FROM thread ORDER BY created_at ASC`,
+      threadId,
+      scopeParam
+    )
+
+    const response: MessageListResponse = {
+      messages: results,
+      total: results.length,
+      offset: 0,
+      limit: results.length,
+    }
+
+    return c.json(response)
   }
 
   const conditions: string[] = ['scope = ?']

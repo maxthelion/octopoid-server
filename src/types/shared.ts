@@ -451,6 +451,7 @@ export interface Message {
   to_actor?: string | null
   type: string
   content: string
+  parent_message_id?: string | null
   created_at: string
   scope?: string | null
 }
@@ -461,6 +462,7 @@ export interface CreateMessageRequest {
   to_actor?: string
   type: string
   content: string
+  parent_message_id?: string
   scope?: string
 }
 
