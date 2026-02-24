@@ -600,6 +600,67 @@ describe('Server Integration Tests', () => {
       expect(data.error).toContain('Cannot set queue to "done"')
       expect(data.error).toContain('/accept')
     })
+
+    it('should clear lease_expires_at via PATCH', async () => {
+      const LEASE_SCOPE = `lease-patch-${Date.now()}`
+
+      // Register orchestrator
+      await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'test',
+          machine_id: 'lease-patch',
+          repo_url: 'https://github.com/test/repo',
+          scope: LEASE_SCOPE,
+        }),
+      })
+
+      // Create and claim a task (gives it a lease_expires_at)
+      const taskId = `test-lease-patch-${Date.now()}`
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/${taskId}.md`,
+          queue: 'incoming',
+          branch: 'main',
+          scope: LEASE_SCOPE,
+        }),
+      })
+
+      await fetch(`${baseUrl}/api/v1/tasks/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orchestrator_id: 'test-lease-patch',
+          agent_name: 'test-agent',
+          scope: LEASE_SCOPE,
+        }),
+      })
+
+      // Verify lease_expires_at is set
+      const before = await (await fetch(`${baseUrl}/api/v1/tasks/${taskId}`)).json() as any
+      expect(before.lease_expires_at).toBeDefined()
+      expect(before.lease_expires_at).not.toBeNull()
+
+      // Clear lease_expires_at and claimed_by via PATCH
+      const patchRes = await fetch(`${baseUrl}/api/v1/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          claimed_by: null,
+          lease_expires_at: null,
+        }),
+      })
+      expect(patchRes.status).toBe(200)
+
+      // Verify both are cleared
+      const after = await (await fetch(`${baseUrl}/api/v1/tasks/${taskId}`)).json() as any
+      expect(after.claimed_by).toBeNull()
+      expect(after.lease_expires_at).toBeNull()
+    })
   })
 
   describe('Roles', () => {

@@ -337,6 +337,7 @@ tasksRoute.patch('/:id', async (c) => {
     'blocked_by',
     'claimed_by',
     'claimed_at',
+    'lease_expires_at',
     'commits_count',
     'turns_used',
     'attempt_count',
