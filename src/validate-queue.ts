@@ -19,7 +19,7 @@ export async function validateQueue(
   db: D1Database,
   queue: string,
   flowName: string = 'default',
-  cluster: string = 'default'
+  scope: string = 'default'
 ): Promise<string | null> {
   if (builtInSet.has(queue)) return null // always valid
 
@@ -27,8 +27,8 @@ export async function validateQueue(
   try {
     flow = await queryOne<{ states: string }>(
       db,
-      'SELECT states FROM flows WHERE name = ? AND cluster = ?',
-      flowName, cluster
+      'SELECT states FROM flows WHERE name = ? AND scope = ?',
+      flowName, scope
     )
   } catch {
     return null // table doesn't exist yet, skip validation
@@ -52,7 +52,7 @@ export async function validateQueue(
 export async function canTransition(
   db: D1Database,
   flowName: string,
-  cluster: string,
+  scope: string,
   fromQueue: string,
   toQueue: string
 ): Promise<boolean | null> {
@@ -60,8 +60,8 @@ export async function canTransition(
   try {
     flow = await queryOne<{ transitions: string }>(
       db,
-      'SELECT transitions FROM flows WHERE name = ? AND cluster = ?',
-      flowName, cluster
+      'SELECT transitions FROM flows WHERE name = ? AND scope = ?',
+      flowName, scope
     )
   } catch {
     return null // table doesn't exist yet

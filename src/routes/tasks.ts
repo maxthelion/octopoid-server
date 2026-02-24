@@ -238,7 +238,7 @@ tasksRoute.post('/', async (c) => {
 
   // Validate queue against registered flow
   if (body.queue) {
-    const queueError = await validateQueue(db, body.queue, body.flow || 'default', body.cluster || 'default')
+    const queueError = await validateQueue(db, body.queue, body.flow || 'default', body.scope)
     if (queueError) {
       return c.json({ error: queueError }, 400)
     }
@@ -314,14 +314,9 @@ tasksRoute.patch('/:id', async (c) => {
 
   // Validate queue against registered flow
   if (body.queue) {
-    const task = await queryOne<{ flow: string | null; orchestrator_id: string | null }>(db, 'SELECT flow, orchestrator_id FROM tasks WHERE id = ?', taskId)
+    const task = await queryOne<{ flow: string | null; scope: string | null }>(db, 'SELECT flow, scope FROM tasks WHERE id = ?', taskId)
     const flowName = task?.flow || 'default'
-    let cluster = 'default'
-    if (task?.orchestrator_id) {
-      const orch = await queryOne<{ cluster: string }>(db, 'SELECT cluster FROM orchestrators WHERE id = ?', task.orchestrator_id)
-      if (orch) cluster = orch.cluster
-    }
-    const queueError = await validateQueue(db, body.queue, flowName, cluster)
+    const queueError = await validateQueue(db, body.queue, flowName, task?.scope || 'default')
     if (queueError) {
       return c.json({ error: queueError }, 400)
     }
@@ -523,10 +518,7 @@ tasksRoute.post('/claim', async (c) => {
 
   // Validate queue against registered flow
   if (body.queue) {
-    let cluster = 'default'
-    const orch = await queryOne<{ cluster: string }>(db, 'SELECT cluster FROM orchestrators WHERE id = ?', body.orchestrator_id)
-    if (orch) cluster = orch.cluster
-    const queueError = await validateQueue(db, body.queue, 'default', cluster)
+    const queueError = await validateQueue(db, body.queue, 'default', body.scope)
     if (queueError) {
       return c.json({ error: queueError }, 400)
     }
@@ -798,15 +790,9 @@ tasksRoute.post('/:id/accept', async (c) => {
     return c.json({ error: 'Task not found', task_id: taskId }, 404)
   }
 
-  // Resolve cluster for flow lookup
   const flowName = task.flow || 'default'
-  let cluster = 'default'
-  if (task.orchestrator_id) {
-    const orch = await queryOne<{ cluster: string }>(db, 'SELECT cluster FROM orchestrators WHERE id = ?', task.orchestrator_id)
-    if (orch) cluster = orch.cluster
-  }
 
-  const allowed = await canTransition(db, flowName, cluster, task.queue, 'done')
+  const allowed = await canTransition(db, flowName, task.scope || 'default', task.queue, 'done')
   if (allowed === null) {
     // No flow registered — fall back to hardcoded behaviour
     if (task.queue !== 'provisional') {
@@ -882,15 +868,9 @@ tasksRoute.post('/:id/reject', async (c) => {
     return c.json({ error: 'Task not found', task_id: taskId }, 404)
   }
 
-  // Resolve cluster for flow lookup
   const flowName = task.flow || 'default'
-  let cluster = 'default'
-  if (task.orchestrator_id) {
-    const orch = await queryOne<{ cluster: string }>(db, 'SELECT cluster FROM orchestrators WHERE id = ?', task.orchestrator_id)
-    if (orch) cluster = orch.cluster
-  }
 
-  const allowed = await canTransition(db, flowName, cluster, task.queue, 'incoming')
+  const allowed = await canTransition(db, flowName, task.scope || 'default', task.queue, 'incoming')
   if (allowed === null) {
     // No flow registered — fall back to hardcoded behaviour
     if (task.queue !== 'provisional') {
@@ -953,15 +933,9 @@ tasksRoute.post('/:id/requeue', async (c) => {
     return c.json({ error: 'Task not found', task_id: taskId }, 404)
   }
 
-  // Resolve cluster for flow lookup
   const flowName = task.flow || 'default'
-  let cluster = 'default'
-  if (task.orchestrator_id) {
-    const orch = await queryOne<{ cluster: string }>(db, 'SELECT cluster FROM orchestrators WHERE id = ?', task.orchestrator_id)
-    if (orch) cluster = orch.cluster
-  }
 
-  const allowed = await canTransition(db, flowName, cluster, task.queue, 'incoming')
+  const allowed = await canTransition(db, flowName, task.scope || 'default', task.queue, 'incoming')
   if (allowed === null) {
     // No flow registered — fall back to hardcoded behaviour
     if (task.queue !== 'claimed' && task.queue !== 'provisional') {

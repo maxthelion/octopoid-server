@@ -17,9 +17,13 @@ flowsRoute.put('/:name', async (c) => {
   const db = c.env.DB
   const name = c.req.param('name')
   const body = await c.req.json() as {
-    cluster?: string
+    scope?: string
     states: string[]
     transitions: Array<{ from: string; to: string }>
+  }
+
+  if (!body.scope) {
+    return c.json({ error: 'Missing required field: scope' }, 400)
   }
 
   if (!body.states || !Array.isArray(body.states)) {
@@ -40,29 +44,29 @@ flowsRoute.put('/:name', async (c) => {
     }
   }
 
-  const cluster = body.cluster || 'default'
+  const scope = body.scope
   const statesJson = JSON.stringify(body.states)
   const transitionsJson = JSON.stringify(body.transitions)
 
   // Upsert: INSERT OR REPLACE
   await execute(
     db,
-    `INSERT OR REPLACE INTO flows (name, cluster, states, transitions, registered_at, updated_at)
+    `INSERT OR REPLACE INTO flows (name, scope, states, transitions, registered_at, updated_at)
      VALUES (?, ?, ?, ?, COALESCE(
-       (SELECT registered_at FROM flows WHERE name = ? AND cluster = ?),
+       (SELECT registered_at FROM flows WHERE name = ? AND scope = ?),
        datetime('now')
      ), datetime('now'))`,
-    name, cluster, statesJson, transitionsJson, name, cluster
+    name, scope, statesJson, transitionsJson, name, scope
   )
 
   const flow = await queryOne<{
     name: string
-    cluster: string
+    scope: string
     states: string
     transitions: string
     registered_at: string
     updated_at: string
-  }>(db, 'SELECT * FROM flows WHERE name = ? AND cluster = ?', name, cluster)
+  }>(db, 'SELECT * FROM flows WHERE name = ? AND scope = ?', name, scope)
 
   return c.json(flow)
 })
@@ -73,15 +77,20 @@ flowsRoute.put('/:name', async (c) => {
  */
 flowsRoute.get('/', async (c) => {
   const db = c.env.DB
+  const scope = c.req.query('scope')
+
+  if (!scope) {
+    return c.json({ error: 'Missing required query parameter: scope. Cannot list flows across all scopes.' }, 400)
+  }
 
   const flows = await query<{
     name: string
-    cluster: string
+    scope: string
     states: string
     transitions: string
     registered_at: string
     updated_at: string
-  }>(db, 'SELECT * FROM flows ORDER BY name ASC')
+  }>(db, 'SELECT * FROM flows WHERE scope = ? ORDER BY name ASC', scope)
 
   return c.json({ flows })
 })
@@ -93,20 +102,50 @@ flowsRoute.get('/', async (c) => {
 flowsRoute.get('/:name', async (c) => {
   const db = c.env.DB
   const name = c.req.param('name')
-  const cluster = c.req.query('cluster') || 'default'
+  const scope = c.req.query('scope')
+
+  if (!scope) {
+    return c.json({ error: 'Missing required query parameter: scope' }, 400)
+  }
 
   const flow = await queryOne<{
     name: string
-    cluster: string
+    scope: string
     states: string
     transitions: string
     registered_at: string
     updated_at: string
-  }>(db, 'SELECT * FROM flows WHERE name = ? AND cluster = ?', name, cluster)
+  }>(db, 'SELECT * FROM flows WHERE name = ? AND scope = ?', name, scope)
 
   if (!flow) {
     return c.json({ error: 'Flow not found' }, 404)
   }
 
   return c.json(flow)
+})
+
+/**
+ * Delete a flow
+ * DELETE /api/v1/flows/:name
+ */
+flowsRoute.delete('/:name', async (c) => {
+  const db = c.env.DB
+  const name = c.req.param('name')
+  const scope = c.req.query('scope')
+
+  if (!scope) {
+    return c.json({ error: 'Missing required query parameter: scope' }, 400)
+  }
+
+  const result = await execute(
+    db,
+    'DELETE FROM flows WHERE name = ? AND scope = ?',
+    name, scope
+  )
+
+  if (result.meta.changes === 0) {
+    return c.json({ error: 'Flow not found' }, 404)
+  }
+
+  return c.json({ message: 'Flow deleted', name, scope })
 })

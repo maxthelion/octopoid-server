@@ -1725,7 +1725,7 @@ describe('Server Integration Tests', () => {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          cluster: 'flowtest',
+          scope: FLOW_SCOPE,
           states: ['incoming', 'claimed', 'staging', 'done', 'failed'],
           transitions: [
             { from: 'incoming', to: 'claimed' },
@@ -1740,6 +1740,23 @@ describe('Server Integration Tests', () => {
     })
 
     async function createStagingTask(taskId: string, scope: string): Promise<void> {
+      // Register the custom flow for this scope
+      await fetch(`${baseUrl}/api/v1/flows/custom`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope,
+          states: ['incoming', 'claimed', 'staging', 'done', 'failed'],
+          transitions: [
+            { from: 'incoming', to: 'claimed' },
+            { from: 'claimed', to: 'staging' },
+            { from: 'staging', to: 'done' },
+            { from: 'staging', to: 'incoming' },
+            { from: 'claimed', to: 'incoming' },
+          ],
+        }),
+      })
+
       // Create task with flow='custom'
       await fetch(`${baseUrl}/api/v1/tasks`, {
         method: 'POST',
@@ -1835,7 +1852,7 @@ describe('Server Integration Tests', () => {
         }),
       })
 
-      // Claim so it gets orchestrator_id (for flow/cluster lookup)
+      // Claim so it gets orchestrator_id (for flow lookup)
       await fetch(`${baseUrl}/api/v1/tasks/claim`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1856,6 +1873,84 @@ describe('Server Integration Tests', () => {
       expect(response.status).toBe(409)
       const data = await response.json() as any
       expect(data.error).toContain('Failed to accept task')
+    })
+
+    it('should require scope when listing flows', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/flows`)
+      expect(response.status).toBe(400)
+      const data = await response.json() as any
+      expect(data.error).toContain('scope')
+    })
+
+    it('should list flows filtered by scope', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/flows?scope=${FLOW_SCOPE}`)
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.flows.length).toBeGreaterThanOrEqual(1)
+      const customFlow = data.flows.find((f: any) => f.name === 'custom')
+      expect(customFlow).toBeDefined()
+      expect(customFlow.scope).toBe(FLOW_SCOPE)
+    })
+
+    it('should enforce scope isolation on flows', async () => {
+      const OTHER_SCOPE = `flow-other-${Date.now()}`
+      const response = await fetch(`${baseUrl}/api/v1/flows?scope=${OTHER_SCOPE}`)
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+      expect(data.flows.length).toBe(0)
+    })
+
+    it('should delete a flow', async () => {
+      const DEL_SCOPE = `flow-del-${Date.now()}`
+      // Register a flow
+      await fetch(`${baseUrl}/api/v1/flows/deleteme`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope: DEL_SCOPE,
+          states: ['incoming', 'claimed', 'done', 'failed'],
+          transitions: [{ from: 'incoming', to: 'claimed' }],
+        }),
+      })
+
+      // Verify it exists
+      const getRes = await fetch(`${baseUrl}/api/v1/flows/deleteme?scope=${DEL_SCOPE}`)
+      expect(getRes.status).toBe(200)
+
+      // Delete it
+      const delRes = await fetch(`${baseUrl}/api/v1/flows/deleteme?scope=${DEL_SCOPE}`, {
+        method: 'DELETE',
+      })
+      expect(delRes.status).toBe(200)
+      const delData = await delRes.json() as any
+      expect(delData.message).toBe('Flow deleted')
+
+      // Verify it's gone
+      const getRes2 = await fetch(`${baseUrl}/api/v1/flows/deleteme?scope=${DEL_SCOPE}`)
+      expect(getRes2.status).toBe(404)
+    })
+
+    it('should return 404 when deleting non-existent flow', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/flows/nonexistent?scope=${FLOW_SCOPE}`, {
+        method: 'DELETE',
+      })
+      expect(response.status).toBe(404)
+    })
+
+    it('should require scope when getting a flow', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/flows/custom`)
+      expect(response.status).toBe(400)
+      const data = await response.json() as any
+      expect(data.error).toContain('scope')
+    })
+
+    it('should require scope when deleting a flow', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/flows/custom`, {
+        method: 'DELETE',
+      })
+      expect(response.status).toBe(400)
+      const data = await response.json() as any
+      expect(data.error).toContain('scope')
     })
   })
 
