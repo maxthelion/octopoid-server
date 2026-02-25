@@ -398,6 +398,17 @@ tasksRoute.patch('/:id', async (c) => {
     return c.json({ error: 'Task not found' }, 404)
   }
 
+  // Unblock dependents when a task moves to failed — a failed task will
+  // never complete, so holding up dependent work is worse than releasing it.
+  if (body.queue === 'failed') {
+    await execute(db,
+      `UPDATE tasks
+       SET blocked_by = NULL, updated_at = datetime('now')
+       WHERE blocked_by = ?`,
+      taskId
+    )
+  }
+
   const task = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
 
   audit({
