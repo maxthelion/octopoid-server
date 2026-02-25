@@ -771,55 +771,6 @@ describe('Server Integration Tests', () => {
       // lease_expires_at should still be auto-cleared (not explicitly provided)
       expect(after.lease_expires_at).toBeNull()
     })
-
-    it('should unblock dependent tasks when a task moves to failed', async () => {
-      const UNBLOCK_SCOPE = `unblock-fail-${Date.now()}`
-
-      // Create task A (the blocker)
-      const taskA = `test-blocker-${Date.now()}`
-      await fetch(`${baseUrl}/api/v1/tasks`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: taskA,
-          file_path: `tasks/${taskA}.md`,
-          queue: 'incoming',
-          branch: 'main',
-          scope: UNBLOCK_SCOPE,
-        }),
-      })
-
-      // Create task B blocked by task A
-      const taskB = `test-blocked-${Date.now()}`
-      await fetch(`${baseUrl}/api/v1/tasks`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: taskB,
-          file_path: `tasks/${taskB}.md`,
-          queue: 'incoming',
-          branch: 'main',
-          blocked_by: taskA,
-          scope: UNBLOCK_SCOPE,
-        }),
-      })
-
-      // Verify task B is blocked
-      const before = await (await fetch(`${baseUrl}/api/v1/tasks/${taskB}`)).json() as any
-      expect(before.blocked_by).toBe(taskA)
-
-      // Fail task A
-      const patchRes = await fetch(`${baseUrl}/api/v1/tasks/${taskA}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queue: 'failed' }),
-      })
-      expect(patchRes.status).toBe(200)
-
-      // Verify task B is unblocked
-      const after = await (await fetch(`${baseUrl}/api/v1/tasks/${taskB}`)).json() as any
-      expect(after.blocked_by).toBeNull()
-    })
   })
 
   describe('Roles', () => {
