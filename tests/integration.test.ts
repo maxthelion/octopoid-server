@@ -661,6 +661,116 @@ describe('Server Integration Tests', () => {
       expect(after.claimed_by).toBeNull()
       expect(after.lease_expires_at).toBeNull()
     })
+
+    it('should clear claimed_by and lease_expires_at when PATCH moves to failed', async () => {
+      const FAIL_SCOPE = `fail-clear-${Date.now()}`
+
+      // Register orchestrator
+      await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'test',
+          machine_id: 'fail-clear',
+          repo_url: 'https://github.com/test/repo',
+          scope: FAIL_SCOPE,
+        }),
+      })
+
+      // Create and claim a task
+      const taskId = `test-fail-clear-${Date.now()}`
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/${taskId}.md`,
+          queue: 'incoming',
+          branch: 'main',
+          scope: FAIL_SCOPE,
+        }),
+      })
+
+      await fetch(`${baseUrl}/api/v1/tasks/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orchestrator_id: 'test-fail-clear',
+          agent_name: 'test-agent',
+          scope: FAIL_SCOPE,
+        }),
+      })
+
+      // Verify claimed_by and lease_expires_at are set
+      const before = await (await fetch(`${baseUrl}/api/v1/tasks/${taskId}`)).json() as any
+      expect(before.claimed_by).toBe('test-agent')
+      expect(before.lease_expires_at).not.toBeNull()
+
+      // Move to failed — should auto-clear claim metadata
+      const patchRes = await fetch(`${baseUrl}/api/v1/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queue: 'failed' }),
+      })
+      expect(patchRes.status).toBe(200)
+
+      const after = await (await fetch(`${baseUrl}/api/v1/tasks/${taskId}`)).json() as any
+      expect(after.queue).toBe('failed')
+      expect(after.claimed_by).toBeNull()
+      expect(after.lease_expires_at).toBeNull()
+    })
+
+    it('should preserve explicit claimed_by when PATCH moves to failed', async () => {
+      const FAIL_KEEP_SCOPE = `fail-keep-${Date.now()}`
+
+      await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'test',
+          machine_id: 'fail-keep',
+          repo_url: 'https://github.com/test/repo',
+          scope: FAIL_KEEP_SCOPE,
+        }),
+      })
+
+      const taskId = `test-fail-keep-${Date.now()}`
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/${taskId}.md`,
+          queue: 'incoming',
+          branch: 'main',
+          scope: FAIL_KEEP_SCOPE,
+        }),
+      })
+
+      await fetch(`${baseUrl}/api/v1/tasks/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orchestrator_id: 'test-fail-keep',
+          agent_name: 'test-agent',
+          scope: FAIL_KEEP_SCOPE,
+        }),
+      })
+
+      // Move to failed but explicitly set claimed_by
+      const patchRes = await fetch(`${baseUrl}/api/v1/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queue: 'failed', claimed_by: 'keep-this' }),
+      })
+      expect(patchRes.status).toBe(200)
+
+      const after = await (await fetch(`${baseUrl}/api/v1/tasks/${taskId}`)).json() as any
+      expect(after.queue).toBe('failed')
+      expect(after.claimed_by).toBe('keep-this')
+      // lease_expires_at should still be auto-cleared (not explicitly provided)
+      expect(after.lease_expires_at).toBeNull()
+    })
   })
 
   describe('Roles', () => {

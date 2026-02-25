@@ -368,6 +368,20 @@ tasksRoute.patch('/:id', async (c) => {
     }
   }
 
+  // When a task moves to the failed queue, clear claim metadata.
+  // Failed tasks are not being worked on — retaining the claim
+  // blocks pool capacity and prevents agents from picking up new work.
+  if (body.queue === 'failed') {
+    if (!('claimed_by' in body)) {
+      updates.push('claimed_by = ?')
+      params.push(null)
+    }
+    if (!('lease_expires_at' in body)) {
+      updates.push('lease_expires_at = ?')
+      params.push(null)
+    }
+  }
+
   if (updates.length === 0) {
     return c.json({ error: 'No fields to update' }, 400)
   }
