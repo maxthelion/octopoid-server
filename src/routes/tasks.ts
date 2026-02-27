@@ -78,6 +78,13 @@ tasksRoute.get('/', async (c) => {
     params.push(projectId)
   }
 
+  const needsIntervention = c.req.query('needs_intervention')
+  if (needsIntervention === 'true') {
+    conditions.push('needs_intervention = 1')
+  } else if (needsIntervention === 'false') {
+    conditions.push('needs_intervention = 0')
+  }
+
   const scopeParam = c.req.query('scope')
   if (!scopeParam) {
     return c.json(
@@ -359,6 +366,7 @@ tasksRoute.patch('/:id', async (c) => {
     'flow',
     'flow_overrides',
     'content',
+    'needs_intervention',
   ]
 
   for (const field of fields) {

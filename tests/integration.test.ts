@@ -773,6 +773,101 @@ describe('Server Integration Tests', () => {
     })
   })
 
+  describe('Needs Intervention', () => {
+    const NI_SCOPE = `needs-intervention-${Date.now()}`
+
+    it('should default needs_intervention to false on new tasks', async () => {
+      const taskId = `ni-default-${Date.now()}`
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/${taskId}.md`,
+          queue: 'incoming',
+          branch: 'main',
+          scope: NI_SCOPE,
+        }),
+      })
+
+      const task = await (await fetch(`${baseUrl}/api/v1/tasks/${taskId}`)).json() as any
+      expect(task.needs_intervention).toBe(0)
+    })
+
+    it('should set and clear needs_intervention via PATCH', async () => {
+      const taskId = `ni-patch-${Date.now()}`
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/${taskId}.md`,
+          queue: 'incoming',
+          branch: 'main',
+          scope: NI_SCOPE,
+        }),
+      })
+
+      // Set needs_intervention
+      const setRes = await fetch(`${baseUrl}/api/v1/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ needs_intervention: 1 }),
+      })
+      expect(setRes.status).toBe(200)
+      const setData = await setRes.json() as any
+      expect(setData.needs_intervention).toBe(1)
+
+      // Clear needs_intervention
+      const clearRes = await fetch(`${baseUrl}/api/v1/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ needs_intervention: 0 }),
+      })
+      expect(clearRes.status).toBe(200)
+      const clearData = await clearRes.json() as any
+      expect(clearData.needs_intervention).toBe(0)
+    })
+
+    it('should filter tasks by needs_intervention', async () => {
+      const taskA = `ni-filter-a-${Date.now()}`
+      const taskB = `ni-filter-b-${Date.now()}`
+
+      // Create two tasks
+      for (const id of [taskA, taskB]) {
+        await fetch(`${baseUrl}/api/v1/tasks`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id,
+            file_path: `tasks/${id}.md`,
+            queue: 'incoming',
+            branch: 'main',
+            scope: NI_SCOPE,
+          }),
+        })
+      }
+
+      // Flag only task A
+      await fetch(`${baseUrl}/api/v1/tasks/${taskA}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ needs_intervention: 1 }),
+      })
+
+      // Query needs_intervention=true
+      const res = await fetch(`${baseUrl}/api/v1/tasks?needs_intervention=true&scope=${NI_SCOPE}`)
+      expect(res.status).toBe(200)
+      const data = await res.json() as any
+      expect(data.tasks.length).toBeGreaterThanOrEqual(1)
+      data.tasks.forEach((t: any) => {
+        expect(t.needs_intervention).toBe(1)
+      })
+      expect(data.tasks.some((t: any) => t.id === taskA)).toBe(true)
+      expect(data.tasks.some((t: any) => t.id === taskB)).toBe(false)
+    })
+  })
+
   describe('Roles', () => {
     const orchestratorId = 'test-roles-orch'
     const ROLES_SCOPE = `roles-${Date.now()}`
