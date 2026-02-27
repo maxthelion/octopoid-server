@@ -159,6 +159,12 @@ messagesRoute.get('/', async (c) => {
     params.push(type)
   }
 
+  const unreplied = c.req.query('unreplied')
+  if (unreplied === 'true') {
+    conditions.push('id NOT IN (SELECT parent_message_id FROM messages WHERE parent_message_id IS NOT NULL AND scope = ?)')
+    params.push(scopeParam)
+  }
+
   const whereClause = `WHERE ${conditions.join(' AND ')}`
 
   const countResult = await queryOne<{ count: number }>(

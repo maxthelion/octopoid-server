@@ -1466,6 +1466,80 @@ describe('Server Integration Tests', () => {
       expect(data.messages.length).toBe(0)
       expect(data.total).toBe(0)
     })
+
+    it('should filter unreplied messages', async () => {
+      const UNREPLIED_SCOPE = `unreplied-${Date.now()}`
+      const uTaskId = `unreplied-task-${Date.now()}`
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: uTaskId,
+          file_path: `tasks/${uTaskId}.md`,
+          queue: 'incoming',
+          branch: 'main',
+          scope: UNREPLIED_SCOPE,
+        }),
+      })
+
+      // Create message A (to fixer, will be replied to)
+      const msgARes = await fetch(`${baseUrl}/api/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: uTaskId,
+          from_actor: 'scheduler',
+          to_actor: 'fixer',
+          type: 'instruction',
+          content: 'Fix the build',
+          scope: UNREPLIED_SCOPE,
+        }),
+      })
+      const msgA = await msgARes.json() as any
+
+      // Create message B (to fixer, will NOT be replied to)
+      const msgBRes = await fetch(`${baseUrl}/api/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: uTaskId,
+          from_actor: 'scheduler',
+          to_actor: 'fixer',
+          type: 'instruction',
+          content: 'Fix the tests',
+          scope: UNREPLIED_SCOPE,
+        }),
+      })
+      const msgB = await msgBRes.json() as any
+
+      // Reply to message A
+      await fetch(`${baseUrl}/api/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: uTaskId,
+          from_actor: 'fixer',
+          to_actor: 'scheduler',
+          type: 'status',
+          content: 'Build fixed',
+          parent_message_id: msgA.id,
+          scope: UNREPLIED_SCOPE,
+        }),
+      })
+
+      // Query unreplied messages to fixer
+      const response = await fetch(
+        `${baseUrl}/api/v1/messages?to_actor=fixer&unreplied=true&scope=${UNREPLIED_SCOPE}`
+      )
+      expect(response.status).toBe(200)
+      const data = await response.json() as any
+
+      // Only message B should appear (A has been replied to)
+      expect(data.messages.length).toBe(1)
+      expect(data.messages[0].id).toBe(msgB.id)
+      expect(data.messages[0].content).toBe('Fix the tests')
+      expect(data.messages[0].task_id).toBe(uTaskId)
+    })
   })
 
   describe('Actions', () => {
