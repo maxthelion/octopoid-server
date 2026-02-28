@@ -818,9 +818,9 @@ tasksRoute.post('/:id/accept', async (c) => {
   const allowed = await canTransition(db, flowName, task.scope || 'default', task.queue, 'done')
   if (allowed === null) {
     // No flow registered — fall back to hardcoded behaviour
-    if (task.queue !== 'provisional') {
+    if (task.queue !== 'provisional' && task.queue !== 'claimed') {
       return c.json(
-        { error: 'Failed to accept task', details: [`Invalid transition: task is in ${task.queue}, expected provisional`] },
+        { error: 'Failed to accept task', details: [`Invalid transition: task is in ${task.queue}, expected provisional or claimed`] },
         409
       )
     }
@@ -896,9 +896,9 @@ tasksRoute.post('/:id/reject', async (c) => {
   const allowed = await canTransition(db, flowName, task.scope || 'default', task.queue, 'incoming')
   if (allowed === null) {
     // No flow registered — fall back to hardcoded behaviour
-    if (task.queue !== 'provisional') {
+    if (task.queue !== 'provisional' && task.queue !== 'claimed') {
       return c.json(
-        { error: 'Failed to reject task', details: [`Invalid transition: task is in ${task.queue}, expected provisional`] },
+        { error: 'Failed to reject task', details: [`Invalid transition: task is in ${task.queue}, expected provisional or claimed`] },
         409
       )
     }
