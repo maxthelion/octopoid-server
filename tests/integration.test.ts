@@ -662,6 +662,60 @@ describe('Server Integration Tests', () => {
       expect(after.lease_expires_at).toBeNull()
     })
 
+    it('should reject content changes on claimed tasks', async () => {
+      const CONTENT_SCOPE = `content-guard-${Date.now()}`
+
+      await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'test',
+          machine_id: 'content-guard',
+          repo_url: 'https://github.com/test/repo',
+          scope: CONTENT_SCOPE,
+        }),
+      })
+
+      const taskId = `test-content-guard-${Date.now()}`
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/${taskId}.md`,
+          queue: 'incoming',
+          branch: 'main',
+          content: 'Original content',
+          scope: CONTENT_SCOPE,
+        }),
+      })
+
+      // Claim the task
+      await fetch(`${baseUrl}/api/v1/tasks/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orchestrator_id: 'test-content-guard',
+          agent_name: 'test-agent',
+          scope: CONTENT_SCOPE,
+        }),
+      })
+
+      // Try to change content — should fail
+      const patchRes = await fetch(`${baseUrl}/api/v1/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: 'Modified content' }),
+      })
+      expect(patchRes.status).toBe(400)
+      const data = await patchRes.json() as any
+      expect(data.error).toContain('claimed')
+
+      // Verify content unchanged
+      const task = await (await fetch(`${baseUrl}/api/v1/tasks/${taskId}`)).json() as any
+      expect(task.content).toBe('Original content')
+    })
+
     it('should clear claimed_by and lease_expires_at when PATCH moves to failed', async () => {
       const FAIL_SCOPE = `fail-clear-${Date.now()}`
 
