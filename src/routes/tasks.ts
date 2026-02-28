@@ -319,17 +319,6 @@ tasksRoute.patch('/:id', async (c) => {
     )
   }
 
-  // Guard: Prevent changing task content while claimed
-  if ('content' in body) {
-    const task = await queryOne<{ queue: string }>(db, 'SELECT queue FROM tasks WHERE id = ?', taskId)
-    if (task?.queue === 'claimed') {
-      return c.json(
-        { error: 'Cannot change content of a claimed task. Wait until the task is no longer being worked on.' },
-        400
-      )
-    }
-  }
-
   // Validate queue against registered flow
   if (body.queue) {
     const task = await queryOne<{ flow: string | null; scope: string | null }>(db, 'SELECT flow, scope FROM tasks WHERE id = ?', taskId)
