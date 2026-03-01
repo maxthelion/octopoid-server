@@ -11,6 +11,7 @@ import type {
   SubmitTaskRequest,
   AcceptTaskRequest,
   RejectTaskRequest,
+  ForceQueueRequest,
   TaskListResponse,
   Message,
   MessageListResponse,
@@ -938,6 +939,106 @@ tasksRoute.post('/:id/reject', async (c) => {
   )
 
   const updatedTask = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
+
+  return c.json(updatedTask)
+})
+
+/**
+ * Force-queue task (admin escape hatch — bypasses flow validation)
+ * POST /api/v1/tasks/:id/force-queue
+ */
+tasksRoute.post('/:id/force-queue', async (c) => {
+  const db = c.env.DB
+  const taskId = c.req.param('id')
+  const body = (await c.req.json()) as ForceQueueRequest
+
+  // Validate required fields
+  if (!body.queue || !body.reason) {
+    return c.json(
+      { error: 'Missing required fields: queue, reason' },
+      400
+    )
+  }
+
+  // Validate queue name against registered flow
+  const task = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
+  if (!task) {
+    return c.json({ error: 'Task not found', task_id: taskId }, 404)
+  }
+
+  const flowName = task.flow || 'default'
+  const queueError = await validateQueue(db, body.queue, flowName, task.scope || 'default')
+  if (queueError) {
+    return c.json({ error: queueError }, 400)
+  }
+
+  // Build atomic UPDATE — bypass transition guards
+  const isDone = body.queue === 'done'
+  const result = await execute(db,
+    `UPDATE tasks
+     SET queue = ?,
+         version = version + 1,
+         claimed_by = NULL,
+         claimed_at = NULL,
+         orchestrator_id = NULL,
+         lease_expires_at = NULL,
+         ${isDone ? "completed_at = datetime('now')," : ''}
+         updated_at = datetime('now')
+     WHERE id = ? AND version = ?`,
+    body.queue,
+    taskId,
+    task.version
+  )
+
+  if (result.meta.changes === 0) {
+    return c.json({ error: 'Failed to force-queue task (race condition)' }, 409)
+  }
+
+  // Side effect: record history
+  await execute(db,
+    `INSERT INTO task_history (task_id, event, details, timestamp)
+     VALUES (?, ?, ?, datetime('now'))`,
+    taskId,
+    'force_queue',
+    JSON.stringify({ reason: body.reason, from: task.queue, to: body.queue })
+  )
+
+  // Side effect: record message
+  const msgId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  await execute(db,
+    `INSERT INTO messages (id, task_id, from_actor, type, content, created_at, scope)
+     VALUES (?, ?, ?, ?, ?, datetime('now'), ?)`,
+    msgId,
+    taskId,
+    'system',
+    'force_queue',
+    body.reason,
+    task.scope || null
+  )
+
+  // Side effect: if target is done, unblock dependents
+  if (isDone) {
+    await execute(db,
+      `UPDATE tasks
+       SET blocked_by = NULL, updated_at = datetime('now')
+       WHERE blocked_by = ?`,
+      taskId
+    )
+  }
+
+  const updatedTask = await queryOne<Task>(db, 'SELECT * FROM tasks WHERE id = ?', taskId)
+
+  audit({
+    timestamp: new Date().toISOString(),
+    method: 'POST',
+    path: `/tasks/${taskId}/force-queue`,
+    status: 200,
+    task_id: taskId,
+    scope: task.scope || undefined,
+    queue_from: task.queue,
+    queue_to: body.queue,
+    detail: `force_queue: ${body.reason}`,
+  })
 
   return c.json(updatedTask)
 })

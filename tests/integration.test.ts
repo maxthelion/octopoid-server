@@ -2519,4 +2519,115 @@ describe('Server Integration Tests', () => {
       expect(response.status).toBe(403)
     })
   })
+
+  describe('Force Queue', () => {
+    const FORCE_SCOPE = `force-queue-${Date.now()}`
+
+    beforeAll(async () => {
+      await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'test',
+          machine_id: 'force-queue-machine',
+          repo_url: 'https://github.com/test/repo',
+          scope: FORCE_SCOPE,
+        }),
+      })
+    })
+
+    it('should force-queue a failed task to done', async () => {
+      const taskId = `test-force-queue-${Date.now()}`
+
+      // Create task
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/${taskId}.md`,
+          branch: 'main',
+          scope: FORCE_SCOPE,
+        }),
+      })
+
+      // Move to failed
+      await fetch(`${baseUrl}/api/v1/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queue: 'failed' }),
+      })
+
+      // Force-queue to done
+      const response = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/force-queue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          queue: 'done',
+          reason: 'Manually resolved by admin',
+        }),
+      })
+
+      expect(response.status).toBe(200)
+      const task = await response.json() as any
+      expect(task.queue).toBe('done')
+      expect(task.completed_at).not.toBeNull()
+      expect(task.claimed_by).toBeNull()
+
+      // Verify message was recorded
+      const messagesRes = await fetch(
+        `${baseUrl}/api/v1/messages?task_id=${taskId}&scope=${FORCE_SCOPE}`
+      )
+      const messagesData = await messagesRes.json() as any
+      const forceMsg = messagesData.messages.find(
+        (m: any) => m.type === 'force_queue'
+      )
+      expect(forceMsg).toBeDefined()
+      expect(forceMsg.content).toBe('Manually resolved by admin')
+      expect(forceMsg.from_actor).toBe('system')
+    })
+
+    it('should return 400 when queue or reason is missing', async () => {
+      const taskId = `test-force-queue-400-${Date.now()}`
+
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/${taskId}.md`,
+          branch: 'main',
+          scope: FORCE_SCOPE,
+        }),
+      })
+
+      // Missing reason
+      const res1 = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/force-queue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queue: 'done' }),
+      })
+      expect(res1.status).toBe(400)
+
+      // Missing queue
+      const res2 = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/force-queue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'some reason' }),
+      })
+      expect(res2.status).toBe(400)
+    })
+
+    it('should return 404 for non-existent task', async () => {
+      const response = await fetch(`${baseUrl}/api/v1/tasks/nonexistent-task/force-queue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          queue: 'done',
+          reason: 'test',
+        }),
+      })
+      expect(response.status).toBe(404)
+    })
+  })
 })

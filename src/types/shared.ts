@@ -165,6 +165,11 @@ export interface RejectTaskRequest {
   rejected_by: string
 }
 
+export interface ForceQueueRequest {
+  queue: string
+  reason: string
+}
+
 export interface TaskFilters {
   queue?: TaskQueue | TaskQueue[]
   priority?: TaskPriority | TaskPriority[]
