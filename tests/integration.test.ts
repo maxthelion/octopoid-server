@@ -408,6 +408,63 @@ describe('Server Integration Tests', () => {
       expect(data.submitted_at).toBeDefined()
     })
 
+    it('should clear claimed_by and lease_expires_at on submit', async () => {
+      const SUBMIT_CLEAR_SCOPE = `submit-clear-${Date.now()}`
+
+      await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'test',
+          machine_id: 'submit-clear',
+          repo_url: 'https://github.com/test/repo',
+          scope: SUBMIT_CLEAR_SCOPE,
+        }),
+      })
+
+      const taskId = `test-submit-clear-${Date.now()}`
+      await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/${taskId}.md`,
+          queue: 'incoming',
+          branch: 'main',
+          scope: SUBMIT_CLEAR_SCOPE,
+        }),
+      })
+
+      // Claim the task
+      await fetch(`${baseUrl}/api/v1/tasks/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orchestrator_id: 'test-submit-clear',
+          agent_name: 'implementer-agent',
+          scope: SUBMIT_CLEAR_SCOPE,
+        }),
+      })
+
+      // Verify claimed_by is set
+      const before = await (await fetch(`${baseUrl}/api/v1/tasks/${taskId}`)).json() as any
+      expect(before.claimed_by).toBe('implementer-agent')
+      expect(before.lease_expires_at).not.toBeNull()
+
+      // Submit the task
+      const response = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commits_count: 1, turns_used: 5 }),
+      })
+
+      expect(response.status).toBe(200)
+      const after = await response.json() as any
+      expect(after.queue).toBe('provisional')
+      expect(after.claimed_by).toBeNull()
+      expect(after.lease_expires_at).toBeNull()
+    })
+
     it('should accept a provisional task', async () => {
       // Register orchestrator
       await fetch(`${baseUrl}/api/v1/orchestrators/register`, {

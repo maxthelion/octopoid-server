@@ -733,6 +733,8 @@ tasksRoute.post('/:id/submit', async (c) => {
     `UPDATE tasks
      SET queue = ?,
          version = version + 1,
+         claimed_by = NULL,
+         lease_expires_at = NULL,
          commits_count = ?,
          turns_used = ?,
          check_results = ?,
