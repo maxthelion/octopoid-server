@@ -18,8 +18,7 @@ import type {
 } from '../types/shared.js'
 import type { Env } from '../index'
 import { query, queryOne, execute } from '../database'
-// NOTE: executeTransition/TRANSITIONS from state-machine.ts are no longer used here.
-// These endpoints now use inline atomic UPDATEs with optimistic locking instead.
+import { buildTransitionPatch } from '../transition-table'
 import { getConfig } from '../config'
 import { validateQueue, canTransition } from '../validate-queue'
 import { audit } from '../logger'
@@ -610,25 +609,18 @@ tasksRoute.post('/claim', async (c) => {
 
   // Atomic claim: queue transition + metadata in a single UPDATE with optimistic locking
   const leaseDuration = body.lease_duration_seconds || config.defaultLeaseDurationSeconds
-  const newVersion = task.version + 1
   const leaseExpiry = new Date(Date.now() + leaseDuration * 1000).toISOString()
 
   const targetQueue = claimQueue === 'provisional' ? 'provisional' : 'claimed'
+  const { setClauses, params: patchParams } = buildTransitionPatch(claimQueue, targetQueue, {
+    claimed_by: body.agent_name,
+    claimed_at: { kind: 'sql', expr: "datetime('now')" },
+    lease_expires_at: leaseExpiry,
+    orchestrator_id: body.orchestrator_id,
+  })
   const result = await execute(db,
-    `UPDATE tasks
-     SET queue = ?,
-         version = ?,
-         claimed_by = ?,
-         claimed_at = datetime('now'),
-         lease_expires_at = ?,
-         orchestrator_id = ?,
-         updated_at = datetime('now')
-     WHERE id = ? AND queue = ? AND version = ?`,
-    targetQueue,
-    newVersion,
-    body.agent_name,
-    leaseExpiry,
-    body.orchestrator_id,
+    `UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ? AND queue = ? AND version = ?`,
+    ...patchParams,
     task.id,
     claimQueue,
     task.version
@@ -729,24 +721,16 @@ tasksRoute.post('/:id/submit', async (c) => {
   const targetQueue = burnoutDetected ? 'needs_continuation' : 'provisional'
 
   // Atomic submit: queue transition + metadata in a single UPDATE with optimistic locking
+  const { setClauses, params } = buildTransitionPatch('claimed', targetQueue, {
+    commits_count: body.commits_count,
+    turns_used: body.turns_used,
+    check_results: body.check_results || null,
+    execution_notes: body.execution_notes || null,
+    submitted_at: { kind: 'sql', expr: "datetime('now')" },
+  })
   const result = await execute(db,
-    `UPDATE tasks
-     SET queue = ?,
-         version = version + 1,
-         claimed_by = NULL,
-         lease_expires_at = NULL,
-         commits_count = ?,
-         turns_used = ?,
-         check_results = ?,
-         execution_notes = ?,
-         submitted_at = datetime('now'),
-         updated_at = datetime('now')
-     WHERE id = ? AND queue = 'claimed' AND version = ?`,
-    targetQueue,
-    body.commits_count,
-    body.turns_used,
-    body.check_results || null,
-    body.execution_notes || null,
+    `UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ? AND queue = 'claimed' AND version = ?`,
+    ...params,
     taskId,
     task.version
   )
@@ -836,14 +820,12 @@ tasksRoute.post('/:id/accept', async (c) => {
 
   // Atomic accept: queue transition + completed_at in a single UPDATE with optimistic locking
   const completedAt = body.completed_at || new Date().toISOString()
+  const { setClauses, params } = buildTransitionPatch(task.queue, 'done', {
+    completed_at: completedAt,
+  })
   const result = await execute(db,
-    `UPDATE tasks
-     SET queue = 'done',
-         version = version + 1,
-         completed_at = ?,
-         updated_at = datetime('now')
-     WHERE id = ? AND queue = ? AND version = ?`,
-    completedAt,
+    `UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ? AND queue = ? AND version = ?`,
+    ...params,
     taskId,
     task.queue,
     task.version
@@ -913,17 +895,12 @@ tasksRoute.post('/:id/reject', async (c) => {
   }
 
   // Atomic reject: queue transition + cleanup in a single UPDATE with optimistic locking
+  const { setClauses, params } = buildTransitionPatch(task.queue, 'incoming', {
+    rejection_count: { kind: 'sql', expr: 'rejection_count + 1' },
+  })
   const result = await execute(db,
-    `UPDATE tasks
-     SET queue = 'incoming',
-         version = version + 1,
-         rejection_count = rejection_count + 1,
-         claimed_by = NULL,
-         claimed_at = NULL,
-         orchestrator_id = NULL,
-         lease_expires_at = NULL,
-         updated_at = datetime('now')
-     WHERE id = ? AND queue = ? AND version = ?`,
+    `UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ? AND queue = ? AND version = ?`,
+    ...params,
     taskId,
     task.queue,
     task.version
@@ -976,18 +953,14 @@ tasksRoute.post('/:id/force-queue', async (c) => {
 
   // Build atomic UPDATE — bypass transition guards
   const isDone = body.queue === 'done'
+  const forcePayload: Record<string, unknown> = {}
+  if (isDone) {
+    forcePayload.completed_at = { kind: 'sql', expr: "datetime('now')" }
+  }
+  const { setClauses, params } = buildTransitionPatch(task.queue, body.queue, forcePayload)
   const result = await execute(db,
-    `UPDATE tasks
-     SET queue = ?,
-         version = version + 1,
-         claimed_by = NULL,
-         claimed_at = NULL,
-         orchestrator_id = NULL,
-         lease_expires_at = NULL,
-         ${isDone ? "completed_at = datetime('now')," : ''}
-         updated_at = datetime('now')
-     WHERE id = ? AND version = ?`,
-    body.queue,
+    `UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ? AND version = ?`,
+    ...params,
     taskId,
     task.version
   )
@@ -1078,17 +1051,12 @@ tasksRoute.post('/:id/requeue', async (c) => {
   }
 
   // Atomic requeue: move to incoming, clear claim metadata, increment attempt_count
+  const { setClauses, params } = buildTransitionPatch(task.queue, 'incoming', {
+    attempt_count: { kind: 'sql', expr: 'attempt_count + 1' },
+  })
   const result = await execute(db,
-    `UPDATE tasks
-     SET queue = 'incoming',
-         version = version + 1,
-         claimed_by = NULL,
-         claimed_at = NULL,
-         orchestrator_id = NULL,
-         lease_expires_at = NULL,
-         attempt_count = attempt_count + 1,
-         updated_at = datetime('now')
-     WHERE id = ? AND queue = ? AND version = ?`,
+    `UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ? AND queue = ? AND version = ?`,
+    ...params,
     taskId,
     task.queue,
     task.version

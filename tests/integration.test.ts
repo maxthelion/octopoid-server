@@ -2687,4 +2687,192 @@ describe('Server Integration Tests', () => {
       expect(response.status).toBe(404)
     })
   })
+
+  describe('Transition field clearing', () => {
+    /** Register an orchestrator for a scope and return { scope, orchestratorId } */
+    async function registerScope(suffix: string): Promise<{ scope: string; orchestratorId: string }> {
+      const scope = `tx-clear-${suffix}-${Date.now()}`
+      const machineId = `tx-${suffix}`
+      await fetch(`${baseUrl}/api/v1/orchestrators/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster: 'test',
+          machine_id: machineId,
+          repo_url: 'https://github.com/test/repo',
+          scope,
+        }),
+      })
+      return { scope, orchestratorId: `test-${machineId}` }
+    }
+
+    /** Create a task, claim it, and set needs_intervention */
+    async function createAndClaim(taskId: string, scope: string, orchestratorId: string): Promise<void> {
+      const createRes = await fetch(`${baseUrl}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: taskId,
+          file_path: `tasks/${taskId}.md`,
+          queue: 'incoming',
+          branch: 'main',
+          scope,
+        }),
+      })
+      expect(createRes.status).toBe(201)
+
+      const claimRes = await fetch(`${baseUrl}/api/v1/tasks/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orchestrator_id: orchestratorId,
+          agent_name: 'tx-agent',
+          scope,
+        }),
+      })
+      expect(claimRes.status).toBe(200)
+
+      // Set needs_intervention via PATCH
+      await fetch(`${baseUrl}/api/v1/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ needs_intervention: 1 }),
+      })
+
+      // Verify needs_intervention was set
+      const before = await (await fetch(`${baseUrl}/api/v1/tasks/${taskId}`)).json() as any
+      expect(before.needs_intervention).toBe(1)
+      expect(before.claimed_by).toBe('tx-agent')
+    }
+
+    function assertFieldsCleared(task: any): void {
+      expect(task.claimed_by).toBeNull()
+      expect(task.claimed_at).toBeNull()
+      expect(task.orchestrator_id).toBeNull()
+      expect(task.lease_expires_at).toBeNull()
+      expect(task.needs_intervention).toBe(0)
+    }
+
+    it('submit clears claim and intervention fields', async () => {
+      const { scope, orchestratorId } = await registerScope('submit')
+      const taskId = `tx-submit-${Date.now()}`
+      await createAndClaim(taskId, scope, orchestratorId)
+
+      const res = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commits_count: 1, turns_used: 5 }),
+      })
+      expect(res.status).toBe(200)
+      const task = await res.json() as any
+      expect(task.queue).toBe('provisional')
+      assertFieldsCleared(task)
+    })
+
+    it('accept clears claim and intervention fields', async () => {
+      const { scope, orchestratorId } = await registerScope('accept')
+      const taskId = `tx-accept-${Date.now()}`
+      await createAndClaim(taskId, scope, orchestratorId)
+
+      // Submit first to move to provisional
+      await fetch(`${baseUrl}/api/v1/tasks/${taskId}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commits_count: 1, turns_used: 5 }),
+      })
+
+      // Re-set needs_intervention on provisional task
+      await fetch(`${baseUrl}/api/v1/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ needs_intervention: 1 }),
+      })
+
+      const res = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/accept`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accepted_by: 'tx-reviewer' }),
+      })
+      expect(res.status).toBe(200)
+      const task = await res.json() as any
+      expect(task.queue).toBe('done')
+      assertFieldsCleared(task)
+    })
+
+    it('reject clears claim and intervention fields', async () => {
+      const { scope, orchestratorId } = await registerScope('reject')
+      const taskId = `tx-reject-${Date.now()}`
+      await createAndClaim(taskId, scope, orchestratorId)
+
+      // Submit first to move to provisional
+      await fetch(`${baseUrl}/api/v1/tasks/${taskId}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commits_count: 1, turns_used: 5 }),
+      })
+
+      // Re-set needs_intervention on provisional task
+      await fetch(`${baseUrl}/api/v1/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ needs_intervention: 1 }),
+      })
+
+      const res = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'needs rework', rejected_by: 'tx-reviewer' }),
+      })
+      expect(res.status).toBe(200)
+      const task = await res.json() as any
+      expect(task.queue).toBe('incoming')
+      assertFieldsCleared(task)
+    })
+
+    it('requeue clears claim and intervention fields', async () => {
+      const { scope, orchestratorId } = await registerScope('requeue')
+      const taskId = `tx-requeue-${Date.now()}`
+      await createAndClaim(taskId, scope, orchestratorId)
+
+      const res = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/requeue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      expect(res.status).toBe(200)
+      const task = await res.json() as any
+      expect(task.queue).toBe('incoming')
+      assertFieldsCleared(task)
+    })
+
+    it('force-queue clears claim and intervention fields', async () => {
+      const { scope, orchestratorId } = await registerScope('force')
+      const taskId = `tx-force-${Date.now()}`
+      await createAndClaim(taskId, scope, orchestratorId)
+
+      // Submit to move out of claimed
+      await fetch(`${baseUrl}/api/v1/tasks/${taskId}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commits_count: 1, turns_used: 5 }),
+      })
+
+      // Re-set needs_intervention
+      await fetch(`${baseUrl}/api/v1/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ needs_intervention: 1 }),
+      })
+
+      const res = await fetch(`${baseUrl}/api/v1/tasks/${taskId}/force-queue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queue: 'failed', reason: 'force to failed' }),
+      })
+      expect(res.status).toBe(200)
+      const task = await res.json() as any
+      expect(task.queue).toBe('failed')
+      assertFieldsCleared(task)
+    })
+  })
 })
